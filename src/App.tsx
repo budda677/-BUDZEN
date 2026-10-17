@@ -256,6 +256,7 @@ function App() {
   const [exchangeTo, setExchangeTo] = useState<ExchangeTicker>('A')
   const [exchangeAmount, setExchangeAmount] = useState('100')
   const [exchangeFeedback, setExchangeFeedback] = useState<{ kind: 'error' | 'success'; text: string } | null>(null)
+  const [exchangeBusy, setExchangeBusy] = useState(false)
   const [transferRecipient, setTransferRecipient] = useState('')
   const [transferAmount, setTransferAmount] = useState('100')
   const [transferFeedback, setTransferFeedback] = useState<{ kind: 'error' | 'success'; text: string } | null>(null)
@@ -591,6 +592,22 @@ function App() {
     }
 
     try {
+      setExchangeBusy(true)
+      // Оптимистичное обновление: мгновенно меняем баланс локально, чтобы кнопка «не думала».
+      // Сервер подтвердит результат (или откатим при ошибке).
+      const optimisticRate = exchangeUnitValues[exchangeFrom] / exchangeUnitValues[exchangeTo]
+      const optimisticReceived = Number((amount * optimisticRate).toFixed(4))
+      setProfile((prev) => {
+        if (!prev) return prev
+        const next = { ...prev }
+        if (exchangeFrom === 'BC') next.balanceBc = Number((prev.balanceBc - amount).toFixed(2))
+        if (exchangeFrom === 'A') next.balanceA = Number((prev.balanceA - amount).toFixed(4))
+        if (exchangeFrom === 'B') next.balanceB = Number((prev.balanceB - amount).toFixed(4))
+        if (exchangeTo === 'BC') next.balanceBc = Number((next.balanceBc + optimisticReceived).toFixed(2))
+        if (exchangeTo === 'A') next.balanceA = Number((next.balanceA + optimisticReceived).toFixed(4))
+        if (exchangeTo === 'B') next.balanceB = Number((next.balanceB + optimisticReceived).toFixed(4))
+        return next
+      })
       const result = await api.exchange(exchangeFrom, exchangeTo, amount)
       setProfile(result.profile)
       setCurrencyBalances({ A: result.profile.balanceA, B: result.profile.balanceB })
@@ -600,6 +617,10 @@ function App() {
       setExchangeFeedback({ kind: 'success', text: `Обмен выполнен: ${formatBalance(result.received)} ${exchangeTo}.` })
     } catch (error) {
       setExchangeFeedback({ kind: 'error', text: error instanceof Error ? error.message : 'Не удалось выполнить обмен.' })
+      // Откат оптимистичного изменения при ошибке.
+      void bootstrap()
+    } finally {
+      setExchangeBusy(false)
     }
   }
 
@@ -982,7 +1003,7 @@ function App() {
 
             <div className="exchange-rate-line"><span>Курс</span><strong>1 {exchangeFrom} = {formatBalance(exchangeRate)} {exchangeTo}</strong></div>
             {exchangeFeedback && <p className={`exchange-feedback ${exchangeFeedback.kind}`} role={exchangeFeedback.kind === 'error' ? 'alert' : 'status'}>{exchangeFeedback.text}</p>}
-            <button className="game-action-button exchange-submit" onClick={executeExchange} disabled={exchangeFrom === exchangeTo || !Number.isFinite(exchangeReceive) || exchangeReceive <= 0}>Обменять</button>
+            <button className="game-action-button exchange-submit" onClick={executeExchange} disabled={exchangeBusy || exchangeFrom === exchangeTo || !Number.isFinite(exchangeReceive) || exchangeReceive <= 0}>{exchangeBusy ? 'Обмен…' : 'Обменять'}</button>
           </section>
 
           <div className="section-heading history-heading"><div><h2>История обменов</h2><p>Последние операции</p></div></div>
