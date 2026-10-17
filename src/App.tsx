@@ -360,10 +360,14 @@ function App() {
         rates: { A: ratesResult.rates.A?.rate ?? 1, B: ratesResult.rates.B?.rate ?? 1 },
         history: buildHistory(ratesResult.history, ratesResult.rates),
       })
-      const ach = await api.achievements(authResult.profile.id)
-      setAchievementsData(ach.achievements.map((item) => ({
-        title: item.title, description: item.description, progress: item.progress, target: item.target,
-      })))
+      // Не блокируем первичную отрисовку ожиданием достижений: грузим их в фоне.
+      api.achievements(authResult.profile.id)
+        .then((ach) => {
+          setAchievementsData(ach.achievements.map((item) => ({
+            title: item.title, description: item.description, progress: item.progress, target: item.target,
+          })))
+        })
+        .catch(() => {})
     } catch (error) {
       console.error('Ошибка загрузки данных с сервера:', error)
     }
