@@ -172,7 +172,11 @@ app.post('/api/exchange', async (request, response) => {
   }
 
   try {
-    const user = await getOrCreateUser(identity.userId, identity.tg)
+    // Параллельно: получаем/создаём пользователя и читаем курсы.
+    const [user, rates] = await Promise.all([
+      getOrCreateUser(identity.userId, identity.tg),
+      getRates(),
+    ])
     const balanceKey = { BC: 'balance_bc', A: 'balance_a', B: 'balance_b' }
     const fromKey = balanceKey[from]
     const toKey = balanceKey[to]
@@ -182,7 +186,6 @@ app.post('/api/exchange', async (request, response) => {
       return
     }
 
-    const rates = await getRates()
     const unit = { BC: 1, A: rates.A?.rate ?? 1, B: rates.B?.rate ?? 1 }
     const rate = unit[from] / unit[to]
     const received = Number((amount * rate).toFixed(4))
@@ -199,16 +202,25 @@ app.post('/api/exchange', async (request, response) => {
       .single()
     if (error) throw error
 
-    if (from === 'BC') {
-      const { data: quest } = await supabase.from('quest_progress').select('*').eq('user_id', identity.userId).maybeSingle()
-      await supabase.from('quest_progress').upsert({
-        user_id: Number(identity.userId),
-        exchange_bc: round2(Number(quest?.exchange_bc ?? 0) + amount),
-      })
-    }
+    // Побочные эффекты выполняем ПАРАЛЛЕЛЬНО (а не по цепочке) и ждём их —
+    // так ответ уходит быстрее, но данные гарантированно сохраняются в serverless.
+    await Promise.all([
+      from === 'BC'
+        ? (async () => {
+            try {
+              const { data: quest } = await supabase.from('quest_progress').select('*').eq('user_id', identity.userId).maybeSingle()
+              await supabase.from('quest_progress').upsert({
+                user_id: Number(identity.userId),
+                exchange_bc: round2(Number(quest?.exchange_bc ?? 0) + amount),
+              })
+            } catch { /* игнорируем */ }
+          })()
+        : Promise.resolve(),
+      logTransaction(identity.userId, 'exchange', amount, from, { from, to, received, rate }).catch(() => {}),
+      from === 'BC' ? setAchievementProgress(identity.userId, 'first_exchange', 1).catch(() => {}) : Promise.resolve(),
+    ])
 
-    await logTransaction(identity.userId, 'exchange', amount, from, { from, to, received, rate }).catch(() => {})
-    if (from === 'BC') await setAchievementProgress(identity.userId, 'first_exchange', 1).catch(() => {})
+    response.json({ profile: publicProfile(updated), received })
 
     response.json({ profile: publicProfile(updated), received })
   } catch (error) {
