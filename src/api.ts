@@ -133,6 +133,9 @@ export const api = {
     const tg = getTelegram()
     tg?.ready?.()
     tg?.expand?.()
+    // Прогрев: поднимаем холодную serverless-функцию параллельно, пока грузится UI.
+    // Не ждём ответа и не влияем на логику — просто «будим» API.
+    fetch('/api/health', { method: 'GET', cache: 'no-store' }).catch(() => {})
   },
   auth: () => request<{ profile: PublicProfile }>('/api/auth', {}),
   exchange: (from: string, to: string, amount: number) =>
