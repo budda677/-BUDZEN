@@ -1512,7 +1512,7 @@ function App() {
 
           <div className="profile-stats" aria-label="Статистика профиля">
               <article className="profile-stat-card"><span>Баланс</span><strong>{formatBalance(demoBalance)} <small>BC</small></strong></article>
-              <article className="profile-stat-card"><span>Отправлено</span><strong>{formatBalance(profile?.totalSent ?? 0)} <small>BC</small></strong></article>
+              <article className="profile-stat-card"><span>Выведено</span><strong>{formatBalance(profile?.totalSent ?? 0)} <small>BC</small></strong></article>
               <article className="profile-stat-card"><span>Пополнено</span><strong>{formatBalance(profile?.totalDeposited ?? 0)} <small>BC</small></strong></article>
           </div>
         </section>
