@@ -1,11 +1,11 @@
-﻿// Telegram-бот на Telegraf для BUDZEN.
+// Telegram-бот на Telegraf для BUDZEN.
 // Два режима:
 //   1) Локально — long polling через startBot() (из server/index.js).
 //   2) На Vercel — webhook: createBot() + api/telegram-webhook.js вызывает handleUpdate.
 import { Telegraf, Markup } from 'telegraf'
 import { HttpsProxyAgent } from 'https-proxy-agent'
 
-const MINI_APP_URL = process.env.MINI_APP_URL || ''
+const MINI_APP_URL = process.env.MINI_APP_URL || 'https://budzen-lemon.vercel.app'
 
 function isValidMiniAppUrl(url) {
   try {
