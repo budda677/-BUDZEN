@@ -221,8 +221,6 @@ app.post('/api/exchange', async (request, response) => {
     ])
 
     response.json({ profile: publicProfile(updated), received })
-
-    response.json({ profile: publicProfile(updated), received })
   } catch (error) {
     console.error(error)
     response.status(500).json({ error: 'Не удалось выполнить обмен.' })
@@ -664,6 +662,48 @@ app.get('/api/achievements', async (request, response) => {
 // ---------------------------------------------------------------------------
 app.get('/api/health', (_request, response) => {
   response.json({ ok: true, supabase: Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY) })
+})
+
+// ---------------------------------------------------------------------------
+// POST /api/telegram-webhook — приём обновлений Telegram (бот 24/7 на Vercel).
+// Обрабатывается через createBot() + handleUpdate. Экземпляр кэшируем между вызовами.
+// ---------------------------------------------------------------------------
+let cachedTgBot = null
+function getTgBot(token) {
+  if (!cachedTgBot) {
+    // Динамический импорт, чтобы не тянуть Telegraf, если webhook не используется.
+    return import('./bot.js').then(({ createBot }) => {
+      cachedTgBot = createBot(token)
+      return cachedTgBot
+    })
+  }
+  return Promise.resolve(cachedTgBot)
+}
+
+app.post('/api/telegram-webhook', async (request, response) => {
+  const token = process.env.TELEGRAM_BOT_TOKEN
+  if (!token) { response.status(500).json({ ok: false, error: 'TELEGRAM_BOT_TOKEN не задан' }); return }
+
+  // Проверка секрета (если задан TELEGRAM_WEBHOOK_SECRET — тот же, что в setWebhook).
+  const expectedSecret = process.env.TELEGRAM_WEBHOOK_SECRET
+  if (expectedSecret && request.get('x-telegram-bot-api-secret-token') !== expectedSecret) {
+    response.status(401).json({ ok: false, error: 'bad secret' })
+    return
+  }
+
+  try {
+    const bot = await getTgBot(token)
+    await bot.handleUpdate(request.body)
+    response.status(200).json({ ok: true })
+  } catch (error) {
+    console.error('[webhook] Ошибка обработки update:', error instanceof Error ? error.message : error)
+    // Всегда 200, чтобы Telegram не зацикливал повторные доставки.
+    response.status(200).json({ ok: false })
+  }
+})
+
+app.get('/api/telegram-webhook', (_request, response) => {
+  response.status(200).json({ ok: true })
 })
 
 export default app
