@@ -690,14 +690,25 @@ function App() {
     const claimDate = dateKey(new Date())
     if (dailyBonus.lastClaimDate === claimDate) return
 
+    // Оптимистично: сразу начисляем награду и обновляем серию, чтобы не ждать
+    // ответа удалённого сервера (иначе кнопка «думает» 1–2 сек).
+    const consecutive = dailyBonus.lastClaimDate === shiftDateKey(claimDate, -1)
+    const streak = consecutive ? dailyBonus.streak + 1 : 1
+    const optimisticReward = streak % 7 === 0 ? streakBonusAmount : dailyBonusAmount
+    const prevProfile = profile
+    const prevBonus = dailyBonus
+
+    setProfile((prev) => prev ? { ...prev, balanceBc: Number((prev.balanceBc + optimisticReward).toFixed(2)) } : prev)
+    setDailyBonus({ lastClaimDate: claimDate, streak })
+
     try {
       const result = await api.dailyBonus()
       setProfile(result.profile)
-      const consecutive = dailyBonus.lastClaimDate === shiftDateKey(claimDate, -1)
-      const streak = consecutive ? dailyBonus.streak + 1 : 1
-      setDailyBonus({ lastClaimDate: claimDate, streak })
     } catch (error) {
+      // Откат оптимистичного изменения при ошибке.
       console.error(error)
+      setProfile(prevProfile)
+      setDailyBonus(prevBonus)
     }
   }
 

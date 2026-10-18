@@ -124,21 +124,25 @@ export async function getRatesWithHistory(days = 7) {
 
 // Получить список достижений + прогресс конкретного пользователя.
 export async function getAchievements(userId) {
-  const { data: list, error } = await supabaseAdmin
-    .from('achievements')
-    .select('code, title, description, target, reward_bc, sort_order')
-    .order('sort_order', { ascending: true })
-  if (error) throw error
+  // Два независимых запроса к Supabase — выполняем параллельно, а не по цепочке.
+  const [listResult, progressResult] = await Promise.all([
+    supabaseAdmin
+      .from('achievements')
+      .select('code, title, description, target, reward_bc, sort_order')
+      .order('sort_order', { ascending: true }),
+    userId
+      ? supabaseAdmin
+          .from('user_achievements')
+          .select('achievement, progress, unlocked')
+          .eq('user_id', userId)
+      : Promise.resolve({ data: [] }),
+  ])
+  if (listResult.error) throw listResult.error
+  const list = listResult.data
 
-  let progressMap = {}
-  if (userId) {
-    const { data: progress } = await supabaseAdmin
-      .from('user_achievements')
-      .select('achievement, progress, unlocked')
-      .eq('user_id', userId)
-    for (const row of progress ?? []) {
-      progressMap[row.achievement] = { progress: Number(row.progress), unlocked: row.unlocked }
-    }
+  const progressMap = {}
+  for (const row of progressResult.data ?? []) {
+    progressMap[row.achievement] = { progress: Number(row.progress), unlocked: row.unlocked }
   }
 
   return (list ?? []).map((row) => ({
