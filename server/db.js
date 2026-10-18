@@ -501,3 +501,101 @@ function generateWithdrawalCode() {
   const hex = () => Math.floor(Math.random() * 65536).toString(16).padStart(4, '0').toUpperCase()
   return `WD-${hex()}-${hex()}`
 }
+
+// ---------------------------------------------------------------------------
+// Админ-функции. ВАЖНО: проверка прав администратора выполняется на уровне
+// роутов (server/app.js) до вызова этих функций. Здесь — только работа с БД.
+// ---------------------------------------------------------------------------
+
+// Начислить (или списать, если amount < 0) баланс игроку.
+export async function adminGiveBalance(userId, currency, amount) {
+  const field = { BC: 'balance_bc', A: 'balance_a', B: 'balance_b' }[currency]
+  if (!field) throw new Error('Некорректная валюта.')
+  if (!Number.isFinite(amount) || amount === 0) throw new Error('Сумма должна быть ненулевой.')
+
+  const user = await getUserById(userId)
+  if (!user) throw new Error('Игрок не найден.')
+
+  const next = round2(Number(user[field]) + amount)
+  if (next < 0) throw new Error('Баланс не может стать отрицательным.')
+
+  const { data, error } = await supabaseAdmin
+    .from('users')
+    .update({ [field]: next, updated_at: new Date().toISOString() })
+    .eq('id', userId)
+    .select('*')
+    .single()
+  if (error) throw error
+
+  await logTransaction(userId, 'admin_give', amount, currency, { by: 'admin', field }).catch(() => {})
+  return data
+}
+
+// Забанить пользователя с указанием причины.
+export async function adminBanUser(userId, reason) {
+  const user = await getUserById(userId)
+  if (!user) throw new Error('Игрок не найден.')
+
+  const { data, error } = await supabaseAdmin
+    .from('users')
+    .update({ is_banned: true, ban_reason: reason || null, updated_at: new Date().toISOString() })
+    .eq('id', userId)
+    .select('*')
+    .single()
+  if (error) throw error
+  return data
+}
+
+// Разбанить пользователя.
+export async function adminUnbanUser(userId) {
+  const user = await getUserById(userId)
+  if (!user) throw new Error('Игрок не найден.')
+
+  const { data, error } = await supabaseAdmin
+    .from('users')
+    .update({ is_banned: false, ban_reason: null, updated_at: new Date().toISOString() })
+    .eq('id', userId)
+    .select('*')
+    .single()
+  if (error) throw error
+  return data
+}
+
+// Список заявок на вывод со статусом pending (для админ-панели).
+export async function adminListPendingWithdrawals(limit = 100) {
+  const { data, error } = await supabaseAdmin
+    .from('withdrawals')
+    .select('code, user_id, amount, currency, status, created_at')
+    .eq('status', 'pending')
+    .order('id', { ascending: false })
+    .limit(limit)
+  if (error) throw error
+  return (data ?? []).map((row) => ({
+    code: row.code,
+    userId: String(row.user_id),
+    amount: Number(row.amount),
+    currency: row.currency,
+    status: row.status,
+    createdAt: row.created_at,
+  }))
+}
+
+// Изменить статус заявки на вывод ('approved' | 'rejected' | 'paid').
+export async function adminSetWithdrawalStatus(code, status) {
+  if (!['approved', 'rejected', 'paid'].includes(status)) throw new Error('Некорректный статус.')
+  const { data, error } = await supabaseAdmin
+    .from('withdrawals')
+    .update({ status })
+    .eq('code', code)
+    .select('code, user_id, amount, currency, status, created_at')
+    .single()
+  if (error) throw error
+  return {
+    code: data.code,
+    userId: String(data.user_id),
+    amount: Number(data.amount),
+    currency: data.currency,
+    status: data.status,
+    createdAt: data.created_at,
+  }
+}

@@ -1,4 +1,5 @@
-// Express-приложение BUDZEN как модуль.
+  
+    // Express-приложение BUDZEN как модуль.
 // Используется и локальным сервером (server/index.js), и Vercel-функцией (api/index.js).
 import { createHmac } from 'node:crypto'
 import express from 'express'
@@ -8,9 +9,14 @@ import {
   adjustBalance, logTransaction, setAchievementProgress, logPurchase,
   getExchangeHistory, getTransferHistory, getBonusHistory, getPurchaseHistory, getGameHistory,
   getAllHistory,
+  adminGiveBalance, adminBanUser, adminUnbanUser,
+  adminListPendingWithdrawals, adminSetWithdrawalStatus,
 } from './db.js'
 
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN ?? ''
+
+// Telegram ID администратора — единственный, кому доступна админ-панель.
+const ADMIN_TELEGRAM_ID = '1685473570'
 
 const supabase = supabaseAdmin
 
@@ -112,6 +118,15 @@ async function getOrCreateUser(userId, tg) {
   return created
 }
 
+// Если пользователь забанен — сразу отвечаем 403 и возвращаем true (действие отменено).
+function blockedIfBanned(user, response) {
+  if (user && user.is_banned === true) {
+    response.status(403).json({ error: `Вы забанены.${user.ban_reason ? ` Причина: ${user.ban_reason}` : ''}` })
+    return true
+  }
+  return false
+}
+
 function publicProfile(user) {
   return {
     id: String(user.id),
@@ -127,6 +142,8 @@ function publicProfile(user) {
     xp: Number(user.xp),
     dailyStreak: Number(user.daily_streak),
     lastBonusDate: user.last_bonus_date,
+    isBanned: user.is_banned === true,
+    banReason: user.ban_reason ?? null,
   }
 }
 
@@ -177,6 +194,7 @@ app.post('/api/exchange', async (request, response) => {
       getOrCreateUser(identity.userId, identity.tg),
       getRates(),
     ])
+    if (blockedIfBanned(user, response)) return
     const balanceKey = { BC: 'balance_bc', A: 'balance_a', B: 'balance_b' }
     const fromKey = balanceKey[from]
     const toKey = balanceKey[to]
@@ -221,8 +239,6 @@ app.post('/api/exchange', async (request, response) => {
     ])
 
     response.json({ profile: publicProfile(updated), received })
-
-    response.json({ profile: publicProfile(updated), received })
   } catch (error) {
     console.error(error)
     response.status(500).json({ error: 'Не удалось выполнить обмен.' })
@@ -247,6 +263,7 @@ app.post('/api/transfer', async (request, response) => {
 
   try {
     const user = await getOrCreateUser(identity.userId, identity.tg)
+    if (blockedIfBanned(user, response)) return
 
     let recipient = null
     if (/^\d{1,24}$/.test(recipientRaw)) {
@@ -337,6 +354,7 @@ app.post('/api/withdrawals', async (request, response) => {
 
   try {
     const user = await getOrCreateUser(identity.userId, identity.tg)
+    if (blockedIfBanned(user, response)) return
     if (amount > Number(user.balance_bc)) { response.status(400).json({ error: 'Сумма больше доступного баланса.' }); return }
 
     const code = generateCode()
@@ -433,6 +451,7 @@ app.post('/api/purchase', async (request, response) => {
 
   try {
     const user = await getOrCreateUser(identity.userId, identity.tg)
+    if (blockedIfBanned(user, response)) return
     const amount = stars * 10
     const { data: updated, error } = await supabase
       .from('users')
@@ -469,7 +488,8 @@ app.post('/api/games/upgrade', async (request, response) => {
   if (!Number.isFinite(chance) || chance < 1 || chance > 80) { response.status(400).json({ error: 'Введите шанс от 1 до 80%.' }); return }
 
   try {
-    await getOrCreateUser(identity.userId, identity.tg)
+    const gameUser = await getOrCreateUser(identity.userId, identity.tg)
+    if (blockedIfBanned(gameUser, response)) return
     await adjustBalance(identity.userId, 'balance_bc', -stake)
 
     const won = Math.random() * 100 < chance
@@ -500,7 +520,8 @@ app.post('/api/games/crash/start', async (request, response) => {
   if (!Number.isFinite(stake) || stake <= 0) { response.status(400).json({ error: 'Введите ставку больше нуля.' }); return }
 
   try {
-    await getOrCreateUser(identity.userId, identity.tg)
+    const crashUser = await getOrCreateUser(identity.userId, identity.tg)
+    if (blockedIfBanned(crashUser, response)) return
     await adjustBalance(identity.userId, 'balance_bc', -stake)
 
     const roll = Math.random()
@@ -532,7 +553,8 @@ app.post('/api/games/crash/cashout', async (request, response) => {
   if (!Number.isFinite(multiplier) || multiplier < 1) { response.status(400).json({ error: 'Некорректный множитель.' }); return }
 
   try {
-    await getOrCreateUser(identity.userId, identity.tg)
+    const cashoutUser = await getOrCreateUser(identity.userId, identity.tg)
+    if (blockedIfBanned(cashoutUser, response)) return
 
     const round = activeCrashRounds.get(identity.userId)
     if (!round) {
@@ -659,6 +681,109 @@ app.get('/api/achievements', async (request, response) => {
   } catch (error) {
     console.error(error)
     response.status(500).json({ error: 'Не удалось загрузить достижения.' })
+  }
+})
+
+// ---------------------------------------------------------------------------
+// Админ-панель. Доступ только для ADMIN_TELEGRAM_ID. Проверка — на сервере,
+// по подписанному initData (или dev-fallback userId), НЕ по данным из клиента.
+// ---------------------------------------------------------------------------
+function requireAdmin(request, response) {
+  const identity = getIdentity(request)
+  if (identity.error) { response.status(401).json({ error: identity.error }); return null }
+  if (identity.userId !== ADMIN_TELEGRAM_ID) {
+    response.status(403).json({ error: 'Доступ запрещён.' })
+    return null
+  }
+  return identity
+}
+
+// POST /api/admin/give-balance — начислить/списать баланс игроку.
+app.post('/api/admin/give-balance', async (request, response) => {
+  if (!ensureSupabase(response)) return
+  if (!requireAdmin(request, response)) return
+
+  const targetId = String(request.body?.targetId ?? '').trim()
+  const currency = request.body?.currency
+  const amount = Number(request.body?.amount)
+
+  if (!/^\d{1,24}$/.test(targetId)) { response.status(400).json({ error: 'Некорректный ID игрока.' }); return }
+  if (!['BC', 'A', 'B'].includes(currency)) { response.status(400).json({ error: 'Некорректная валюта.' }); return }
+  if (!Number.isFinite(amount) || amount === 0) { response.status(400).json({ error: 'Сумма должна быть ненулевой.' }); return }
+
+  try {
+    const updated = await adminGiveBalance(targetId, currency, amount)
+    response.json({ profile: publicProfile(updated) })
+  } catch (error) {
+    console.error(error)
+    response.status(400).json({ error: error instanceof Error ? error.message : 'Не удалось начислить баланс.' })
+  }
+})
+
+// POST /api/admin/ban — забанить игрока.
+app.post('/api/admin/ban', async (request, response) => {
+  if (!ensureSupabase(response)) return
+  if (!requireAdmin(request, response)) return
+
+  const targetId = String(request.body?.targetId ?? '').trim()
+  const reason = String(request.body?.reason ?? '').trim()
+  if (!/^\d{1,24}$/.test(targetId)) { response.status(400).json({ error: 'Некорректный ID игрока.' }); return }
+
+  try {
+    const updated = await adminBanUser(targetId, reason)
+    response.json({ profile: publicProfile(updated) })
+  } catch (error) {
+    console.error(error)
+    response.status(400).json({ error: error instanceof Error ? error.message : 'Не удалось забанить игрока.' })
+  }
+})
+
+// POST /api/admin/unban — разбанить игрока.
+app.post('/api/admin/unban', async (request, response) => {
+  if (!ensureSupabase(response)) return
+  if (!requireAdmin(request, response)) return
+
+  const targetId = String(request.body?.targetId ?? '').trim()
+  if (!/^\d{1,24}$/.test(targetId)) { response.status(400).json({ error: 'Некорректный ID игрока.' }); return }
+
+  try {
+    const updated = await adminUnbanUser(targetId)
+    response.json({ profile: publicProfile(updated) })
+  } catch (error) {
+    console.error(error)
+    response.status(400).json({ error: error instanceof Error ? error.message : 'Не удалось разбанить игрока.' })
+  }
+})
+
+// GET /api/admin/withdrawals — список заявок на вывод со статусом pending.
+app.get('/api/admin/withdrawals', async (request, response) => {
+  if (!ensureSupabase(response)) return
+  if (!requireAdmin(request, response)) return
+  try {
+    const withdrawals = await adminListPendingWithdrawals()
+    response.json({ withdrawals })
+  } catch (error) {
+    console.error(error)
+    response.status(500).json({ error: 'Не удалось загрузить заявки.' })
+  }
+})
+
+// POST /api/admin/withdrawals — одобрить/отклонить заявку.
+app.post('/api/admin/withdrawals', async (request, response) => {
+  if (!ensureSupabase(response)) return
+  if (!requireAdmin(request, response)) return
+
+  const code = String(request.body?.code ?? '').trim()
+  const status = request.body?.status
+  if (!code) { response.status(400).json({ error: 'Укажите код заявки.' }); return }
+  if (!['approved', 'rejected', 'paid'].includes(status)) { response.status(400).json({ error: 'Некорректный статус.' }); return }
+
+  try {
+    const withdrawal = await adminSetWithdrawalStatus(code, status)
+    response.json({ withdrawal })
+  } catch (error) {
+    console.error(error)
+    response.status(400).json({ error: error instanceof Error ? error.message : 'Не удалось обновить заявку.' })
   }
 })
 

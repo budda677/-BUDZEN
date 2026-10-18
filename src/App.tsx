@@ -4,8 +4,12 @@ import {
   api, type PublicProfile, type RatePoint,
   type ExchangeHistoryItem, type TransferHistoryItem, type BonusHistoryItem,
   type PurchaseHistoryItem, type GameHistoryItem, type HistoryEntry, type HistoryCategory,
+  type AdminWithdrawalItem,
 } from './api'
 import './App.css'
+
+// Telegram ID администратора — кому видна вкладка «Админ».
+const ADMIN_TELEGRAM_ID = '1685473570'
 
 type RateState = { rates: CurrencyBalances; history: Record<RateTicker, RatePoint[]> }
 type RateTicker = 'A' | 'B'
@@ -254,7 +258,20 @@ function App() {
     }
   })
   const [telegramIdentity] = useState(loadTelegramIdentity)
+  const isAdmin = telegramIdentity.id === ADMIN_TELEGRAM_ID
   const [profile, setProfile] = useState<PublicProfile | null>(null)
+
+  // --- Состояние админ-панели (только для админа) ---
+  const [adminGiveId, setAdminGiveId] = useState('')
+  const [adminGiveCurrency, setAdminGiveCurrency] = useState<'BC' | 'A' | 'B'>('BC')
+  const [adminGiveAmount, setAdminGiveAmount] = useState('100')
+  const [adminGiveMsg, setAdminGiveMsg] = useState<{ kind: 'error' | 'success'; text: string } | null>(null)
+  const [adminBanId, setAdminBanId] = useState('')
+  const [adminBanReason, setAdminBanReason] = useState('')
+  const [adminBanMsg, setAdminBanMsg] = useState<{ kind: 'error' | 'success'; text: string } | null>(null)
+  const [adminWithdrawals, setAdminWithdrawals] = useState<AdminWithdrawalItem[]>([])
+  const [adminWithdrawalsLoading, setAdminWithdrawalsLoading] = useState(false)
+  const [adminWithdrawalsMsg, setAdminWithdrawalsMsg] = useState<{ kind: 'error' | 'success'; text: string } | null>(null)
   const [rates, setRates] = useState<RateState>({ rates: { A: 1, B: 1 }, history: { A: [], B: [] } })
   const [achievementsData, setAchievementsData] = useState<{ title: string; description: string; progress: number; target: number }[]>([])
   const [profileAvatar, setProfileAvatar] = useState(loadProfileAvatar)
@@ -400,17 +417,6 @@ function App() {
       // Keep demo currency balances for the current session when storage is unavailable.
     }
   }, [currencyBalances])
-
-  // Запоминаем реальный баланс BC, чтобы при следующем заходе сразу показывать его,
-  // а не стартовые «1000» до прихода ответа сервера.
-  useEffect(() => {
-    if (!profile) return
-    try {
-      window.localStorage.setItem(lastBalanceStorageKey, String(profile.balanceBc))
-    } catch {
-      // storage недоступен — работаем без кэша баланса.
-    }
-  }, [profile])
 
   useEffect(() => {
     try {
@@ -578,22 +584,13 @@ function App() {
 
     setUpgradeError('')
     setUpgradeResult(null)
+    setUpgradeSpinDuration(spinDuration)
     setUpgradeSpinning(true)
 
     try {
-      // Сначала дожидаемся ответа сервера, и только потом задаём финальный угол и
-      // запускаем анимацию ОДНИМ перерисовыванием. Иначе смена угла посреди уже
-      // идущего CSS-перехода даёт рывок («откат назад и доезд»).
       const result = await api.upgrade(wager, chance)
       setProfile(result.profile)
-
-      // Копим угол, чтобы колесо всегда крутилось вперёд (не откатывалось назад).
-      setUpgradeSpinAngle((prev) => {
-        const base = Math.ceil(prev / 3600) * 3600 // ближайший «полный оборот» вперёд
-        return base + 1800 + (Math.random() * 2 - 1) * 160
-      })
-      setUpgradeSpinDuration(spinDuration)
-
+      setUpgradeSpinAngle(1800 + (Math.random() * 2 - 1) * 160)
       window.setTimeout(() => {
         setQuestState((state) => ({ ...state, upgraderCompleted: true }))
         setUpgradeResult({ won: result.won, payout: result.payout, stake: wager })
@@ -690,25 +687,14 @@ function App() {
     const claimDate = dateKey(new Date())
     if (dailyBonus.lastClaimDate === claimDate) return
 
-    // Оптимистично: сразу начисляем награду и обновляем серию, чтобы не ждать
-    // ответа удалённого сервера (иначе кнопка «думает» 1–2 сек).
-    const consecutive = dailyBonus.lastClaimDate === shiftDateKey(claimDate, -1)
-    const streak = consecutive ? dailyBonus.streak + 1 : 1
-    const optimisticReward = streak % 7 === 0 ? streakBonusAmount : dailyBonusAmount
-    const prevProfile = profile
-    const prevBonus = dailyBonus
-
-    setProfile((prev) => prev ? { ...prev, balanceBc: Number((prev.balanceBc + optimisticReward).toFixed(2)) } : prev)
-    setDailyBonus({ lastClaimDate: claimDate, streak })
-
     try {
       const result = await api.dailyBonus()
       setProfile(result.profile)
+      const consecutive = dailyBonus.lastClaimDate === shiftDateKey(claimDate, -1)
+      const streak = consecutive ? dailyBonus.streak + 1 : 1
+      setDailyBonus({ lastClaimDate: claimDate, streak })
     } catch (error) {
-      // Откат оптимистичного изменения при ошибке.
       console.error(error)
-      setProfile(prevProfile)
-      setDailyBonus(prevBonus)
     }
   }
 
@@ -722,6 +708,70 @@ function App() {
 
     setQuestState((state) => ({ ...state, claimed: { ...state.claimed, [quest]: true } }))
     void api.purchase(Math.max(1, Math.round(questRewardAmount / 10))).then((result) => setProfile(result.profile)).catch(() => {})
+  }
+
+  // --- Админ-действия ---
+  async function adminGive() {
+    const targetId = adminGiveId.trim()
+    const amount = Number(adminGiveAmount)
+    if (!/^\d{1,24}$/.test(targetId)) { setAdminGiveMsg({ kind: 'error', text: 'Введите корректный ID игрока.' }); return }
+    if (!Number.isFinite(amount) || amount === 0) { setAdminGiveMsg({ kind: 'error', text: 'Введите ненулевую сумму.' }); return }
+    try {
+      await api.adminGiveBalance(targetId, adminGiveCurrency, amount)
+      setAdminGiveMsg({ kind: 'success', text: `Готово: ${amount > 0 ? 'начислено' : 'списано'} ${Math.abs(amount)} ${adminGiveCurrency} игроку ${targetId}.` })
+      setAdminGiveId('')
+    } catch (error) {
+      setAdminGiveMsg({ kind: 'error', text: error instanceof Error ? error.message : 'Не удалось начислить баланс.' })
+    }
+  }
+
+  async function adminBan() {
+    const targetId = adminBanId.trim()
+    if (!/^\d{1,24}$/.test(targetId)) { setAdminBanMsg({ kind: 'error', text: 'Введите корректный ID игрока.' }); return }
+    try {
+      await api.adminBan(targetId, adminBanReason.trim())
+      setAdminBanMsg({ kind: 'success', text: `Игрок ${targetId} забанен.` })
+      setAdminBanId('')
+      setAdminBanReason('')
+    } catch (error) {
+      setAdminBanMsg({ kind: 'error', text: error instanceof Error ? error.message : 'Не удалось забанить.' })
+    }
+  }
+
+  async function adminUnban() {
+    const targetId = adminBanId.trim()
+    if (!/^\d{1,24}$/.test(targetId)) { setAdminBanMsg({ kind: 'error', text: 'Введите корректный ID игрока.' }); return }
+    try {
+      await api.adminUnban(targetId)
+      setAdminBanMsg({ kind: 'success', text: `Игрок ${targetId} разбанен.` })
+      setAdminBanId('')
+      setAdminBanReason('')
+    } catch (error) {
+      setAdminBanMsg({ kind: 'error', text: error instanceof Error ? error.message : 'Не удалось разбанить.' })
+    }
+  }
+
+  async function adminLoadWithdrawals() {
+    setAdminWithdrawalsLoading(true)
+    setAdminWithdrawalsMsg(null)
+    try {
+      const result = await api.adminWithdrawals()
+      setAdminWithdrawals(result.withdrawals)
+    } catch (error) {
+      setAdminWithdrawalsMsg({ kind: 'error', text: error instanceof Error ? error.message : 'Не удалось загрузить заявки.' })
+    } finally {
+      setAdminWithdrawalsLoading(false)
+    }
+  }
+
+  async function adminResolveWithdrawal(code: string, status: 'approved' | 'rejected') {
+    try {
+      await api.adminSetWithdrawal(code, status)
+      setAdminWithdrawals((list) => list.filter((item) => item.code !== code))
+      setAdminWithdrawalsMsg({ kind: 'success', text: `Заявка ${code}: ${status === 'approved' ? 'одобрена' : 'отклонена'}.` })
+    } catch (error) {
+      setAdminWithdrawalsMsg({ kind: 'error', text: error instanceof Error ? error.message : 'Не удалось обновить заявку.' })
+    }
   }
 
   async function copyReferralLink() {
@@ -937,6 +987,20 @@ function App() {
     }
   }
 
+  // Если пользователь забанен — показываем заглушку и блокируем всё приложение.
+  if (profile?.isBanned) {
+    return (
+      <main className="app">
+        <section className="ban-screen">
+          <div className="ban-emblem" aria-hidden="true">⛔</div>
+          <h1>Вы забанены</h1>
+          <p>{profile.banReason ? `Причина: ${profile.banReason}` : 'Доступ к приложению ограничен администратором.'}</p>
+          <span className="ban-note">Если вы считаете это ошибкой — свяжитесь с поддержкой.</span>
+        </section>
+      </main>
+    )
+  }
+
   return (
     <main className="app">
       <header className="topbar">
@@ -947,13 +1011,25 @@ function App() {
             <div className="brand-caption">GAME CURRENCY EXCHANGE</div>
           </div>
         </div>
-        <div className="header-balance">
-          <img src="/logo.svg" alt="" />
-          <div className="header-balance-copy">
-            <strong>{formatBalance(demoBalance)} BC</strong>
-            <small>BUDDA COINS (BC)</small>
+        <div className="topbar-right">
+          {isAdmin && (
+            <button
+              className="admin-gear-button"
+              onClick={() => setTab('Админ')}
+              aria-label="Админ-панель"
+              title="Админ-панель"
+            >
+              ⚙
+            </button>
+          )}
+          <div className="header-balance">
+            <img src="/logo.svg" alt="" />
+            <div className="header-balance-copy">
+              <strong>{formatBalance(demoBalance)} BC</strong>
+              <small>BUDDA COINS (BC)</small>
+            </div>
+            <button className="header-buy-button" onClick={() => setTab('Покупка BC')} aria-label="Купить BC" title="Купить BC">+</button>
           </div>
-          <button className="header-buy-button" onClick={() => setTab('Покупка BC')} aria-label="Купить BC" title="Купить BC">+</button>
         </div>
       </header>
 
@@ -1255,14 +1331,12 @@ function App() {
                         <path d="M126 177 160 152l34 25v14l-34-25-34 25z" className="upgrade-chevron dim" />
                         <text x="160" y="223" className="upgrade-wheel-chance-label" textAnchor="middle">{selectedChance}%</text>
                       </g>
+                      <path
+                        d="m160 277-9 20 9-5 9 5z"
+                        className={upgradeSpinning ? 'upgrade-wheel-pointer is-spinning' : 'upgrade-wheel-pointer'}
+                        style={{ '--pointer-spin-angle': `${upgradeSpinAngle}deg`, '--spin-duration': `${upgradeSpinDuration}ms`, ...(!upgradeSpinning ? { transform: `rotate(${upgradeSpinAngle % 360}deg)` } : {}) } as React.CSSProperties}
+                      />
                     </svg>
-                    <div
-                      className={upgradeSpinning ? 'upgrade-wheel-needle is-spinning' : 'upgrade-wheel-needle'}
-                      style={{ '--needle-angle': `${upgradeSpinAngle}deg`, '--spin-duration': `${upgradeSpinDuration}ms`, ...(!upgradeSpinning ? { transform: `rotate(${upgradeSpinAngle % 360}deg)` } : {}) } as React.CSSProperties}
-                      aria-hidden="true"
-                    >
-                      <span className="upgrade-wheel-needle-tri" />
-                    </div>
                   </div>
                 </div>
 
@@ -1394,6 +1468,78 @@ function App() {
         </section>
       )}
 
+      {tab === 'Админ' && isAdmin && (
+        <section className="section-view admin-view">
+          <div className="section-heading"><div><h2>Админ-панель</h2><p>Управление игроками и заявками</p></div></div>
+
+          {/* Форма 1: выдать баланс */}
+          <section className="economy-card admin-card">
+            <h3>Выдать баланс</h3>
+            <label className="game-field-label" htmlFor="admin-give-id">ID игрока</label>
+            <div className="exchange-input-row">
+              <input id="admin-give-id" type="text" inputMode="numeric" placeholder="Telegram ID" value={adminGiveId} onChange={(event) => { setAdminGiveId(event.target.value); setAdminGiveMsg(null) }} />
+            </div>
+            <label className="game-field-label" htmlFor="admin-give-currency">Валюта</label>
+            <select id="admin-give-currency" className="admin-select" value={adminGiveCurrency} onChange={(event) => setAdminGiveCurrency(event.target.value as 'BC' | 'A' | 'B')}>
+              <option value="BC">BC</option>
+              <option value="A">A (ALPHA)</option>
+              <option value="B">B (BETA)</option>
+            </select>
+            <label className="game-field-label" htmlFor="admin-give-amount">Сумма</label>
+            <div className="exchange-input-row">
+              <input id="admin-give-amount" type="number" value={adminGiveAmount} onChange={(event) => { setAdminGiveAmount(event.target.value); setAdminGiveMsg(null) }} />
+            </div>
+            {adminGiveMsg && <p className={`exchange-feedback ${adminGiveMsg.kind}`} role={adminGiveMsg.kind === 'error' ? 'alert' : 'status'}>{adminGiveMsg.text}</p>}
+            <button className="game-action-button" onClick={adminGive}>Начислить</button>
+          </section>
+
+          {/* Форма 2: забанить / разбанить */}
+          <section className="economy-card admin-card">
+            <h3>Забанить / Разбанить</h3>
+            <label className="game-field-label" htmlFor="admin-ban-id">ID игрока</label>
+            <div className="exchange-input-row">
+              <input id="admin-ban-id" type="text" inputMode="numeric" placeholder="Telegram ID" value={adminBanId} onChange={(event) => { setAdminBanId(event.target.value); setAdminBanMsg(null) }} />
+            </div>
+            <label className="game-field-label" htmlFor="admin-ban-reason">Причина</label>
+            <div className="exchange-input-row">
+              <input id="admin-ban-reason" type="text" placeholder="Причина бана" value={adminBanReason} onChange={(event) => { setAdminBanReason(event.target.value); setAdminBanMsg(null) }} />
+            </div>
+            {adminBanMsg && <p className={`exchange-feedback ${adminBanMsg.kind}`} role={adminBanMsg.kind === 'error' ? 'alert' : 'status'}>{adminBanMsg.text}</p>}
+            <div className="admin-ban-actions">
+              <button className="game-action-button admin-ban-btn" onClick={adminBan}>Забанить</button>
+              <button className="game-action-button admin-unban-btn" onClick={adminUnban}>Разбанить</button>
+            </div>
+          </section>
+
+          {/* Форма 3: заявки на вывод */}
+          <section className="economy-card admin-card">
+            <div className="admin-withdrawals-head">
+              <h3>Заявки на вывод</h3>
+              <button className="text-button" onClick={adminLoadWithdrawals} disabled={adminWithdrawalsLoading}>{adminWithdrawalsLoading ? 'Загрузка…' : 'Обновить'}</button>
+            </div>
+            {adminWithdrawalsMsg && <p className={`exchange-feedback ${adminWithdrawalsMsg.kind}`} role={adminWithdrawalsMsg.kind === 'error' ? 'alert' : 'status'}>{adminWithdrawalsMsg.text}</p>}
+            {adminWithdrawals.length > 0 ? (
+              <div className="admin-withdrawals-list">
+                {adminWithdrawals.map((item) => (
+                  <article className="admin-withdrawal-row" key={item.code}>
+                    <div className="admin-withdrawal-info">
+                      <strong>{item.code}</strong>
+                      <small>ID {item.userId} · {formatBalance(item.amount)} {item.currency}</small>
+                    </div>
+                    <div className="admin-withdrawal-actions">
+                      <button className="admin-approve-btn" onClick={() => adminResolveWithdrawal(item.code, 'approved')}>Одобрить</button>
+                      <button className="admin-reject-btn" onClick={() => adminResolveWithdrawal(item.code, 'rejected')}>Отклонить</button>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            ) : (
+              <p className="history-empty">{adminWithdrawalsLoading ? 'Загружаем…' : 'Нажмите «Обновить», чтобы загрузить pending-заявки.'}</p>
+            )}
+          </section>
+        </section>
+      )}
+
       {tab === 'Активность' && (
         <section className="section-view activity-view">
           <div className="section-heading"><div><h2>Активность</h2><p>Награды, задания и события</p></div></div>
@@ -1512,7 +1658,7 @@ function App() {
 
           <div className="profile-stats" aria-label="Статистика профиля">
               <article className="profile-stat-card"><span>Баланс</span><strong>{formatBalance(demoBalance)} <small>BC</small></strong></article>
-              <article className="profile-stat-card"><span>Выведено</span><strong>{formatBalance(profile?.totalSent ?? 0)} <small>BC</small></strong></article>
+              <article className="profile-stat-card"><span>Отправлено</span><strong>{formatBalance(profile?.totalSent ?? 0)} <small>BC</small></strong></article>
               <article className="profile-stat-card"><span>Пополнено</span><strong>{formatBalance(profile?.totalDeposited ?? 0)} <small>BC</small></strong></article>
           </div>
         </section>
@@ -1759,7 +1905,7 @@ function App() {
         </section>
       )}
 
-      {!['Главная', 'Обмен', 'Перевод', 'Игры', 'Активность', 'Профиль', 'Портфель', 'Курсы', 'Вывод BC', 'История', 'Ежедневный бонус', 'Квесты', 'Достижения', 'Рефералы', 'Партнёры', 'Покупка BC', 'Пополнить', ...games].includes(tab) && (
+      {!['Главная', 'Обмен', 'Перевод', 'Игры', 'Активность', 'Профиль', 'Портфель', 'Курсы', 'Вывод BC', 'История', 'Ежедневный бонус', 'Квесты', 'Достижения', 'Рефералы', 'Партнёры', 'Покупка BC', 'Пополнить', 'Админ', ...games].includes(tab) && (
         <section className="notice-panel">
           <div className="notice-symbol">✦</div>
           <div><strong>{tab}</strong><p>Этот раздел пока в разработке. Скоро здесь появятся настоящие функции!</p></div>

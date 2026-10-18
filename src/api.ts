@@ -40,6 +40,18 @@ export type PublicProfile = {
   xp: number
   dailyStreak: number
   lastBonusDate: string | null
+  isBanned: boolean
+  banReason: string | null
+}
+
+// Элемент заявки на вывод в админ-панели (с ID игрока).
+export type AdminWithdrawalItem = {
+  code: string
+  userId: string
+  amount: number
+  currency: 'BC'
+  status: 'pending' | 'approved' | 'rejected' | 'paid'
+  createdAt: string
 }
 
 export type WithdrawalItem = {
@@ -172,4 +184,15 @@ export const api = {
     request<{ items: GameHistoryItem[] }>(`/api/history/games?userId=${encodeURIComponent(userId)}&game=${game}`),
   historyAll: (userId: string) =>
     request<{ items: HistoryEntry[] }>(`/api/history/all?userId=${encodeURIComponent(userId)}`),
+  // --- Админ-панель (доступ проверяется на сервере по Telegram ID) ---
+  adminGiveBalance: (targetId: string, currency: 'BC' | 'A' | 'B', amount: number) =>
+    request<{ profile: PublicProfile }>('/api/admin/give-balance', { targetId, currency, amount }),
+  adminBan: (targetId: string, reason: string) =>
+    request<{ profile: PublicProfile }>('/api/admin/ban', { targetId, reason }),
+  adminUnban: (targetId: string) =>
+    request<{ profile: PublicProfile }>('/api/admin/unban', { targetId }),
+  adminWithdrawals: () =>
+    request<{ withdrawals: AdminWithdrawalItem[] }>('/api/admin/withdrawals'),
+  adminSetWithdrawal: (code: string, status: 'approved' | 'rejected' | 'paid') =>
+    request<{ withdrawal: AdminWithdrawalItem }>('/api/admin/withdrawals', { code, status }),
 }
