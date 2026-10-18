@@ -8,24 +8,28 @@ import { creditStarsPurchase } from './db.js'
 
 const MINI_APP_URL = process.env.MINI_APP_URL || 'https://budzen-lemon.vercel.app'
 
-// Пакеты пополнения BC за Telegram Stars (1 Star = 10 BC).
-// amount в invoice — это звёзды (XTR), BC начисляем = stars * 10.
-export const STAR_PACKAGES = {
-  buy_bc_1000: { stars: 100, bc: 1000, label: '1000 BC' },
-  buy_bc_2500: { stars: 250, bc: 2500, label: '2500 BC' },
-  buy_bc_5000: { stars: 500, bc: 5000, label: '5000 BC' },
+// Курс пополнения: 1 Star = 10 BC. Минимум — 1 Star (10 BC).
+export const BC_PER_STAR = 10
+export const MIN_STARS = 1
+export const MAX_STARS = 100000
+
+// Перевести сумму BC в целое число звёзд (вверх, чтобы не недоначислить).
+export function starsForBc(bc) {
+  return Math.max(MIN_STARS, Math.ceil(Number(bc) / BC_PER_STAR))
 }
 
-// Собрать объект invoice для createInvoiceLink / replyWithInvoice.
-export function buildInvoice(payload) {
-  const pack = STAR_PACKAGES[payload]
-  if (!pack) return null
+// Собрать объект invoice для createInvoiceLink / replyWithInvoice по количеству звёзд.
+// payload кодирует число звёзд: 'buy_bc_<stars>'. При successful_payment BC = stars * BC_PER_STAR.
+export function buildInvoiceByStars(stars) {
+  const safeStars = Math.min(MAX_STARS, Math.max(MIN_STARS, Math.ceil(Number(stars))))
+  if (!Number.isFinite(safeStars) || safeStars < MIN_STARS) return null
+  const bc = safeStars * BC_PER_STAR
   return {
-    title: `Пополнение BUDZEN`,
-    description: `Начисление ${pack.label} на игровой баланс`,
-    payload,
+    title: 'Пополнение BUDZEN',
+    description: `Начисление ${bc} BC на игровой баланс`,
+    payload: `buy_bc_${safeStars}`,
     currency: 'XTR', // Telegram Stars
-    prices: [{ label: pack.label, amount: pack.stars }],
+    prices: [{ label: `${bc} BC`, amount: safeStars }],
     provider_token: '', // пустая строка для цифровых товаров (Stars)
   }
 }
@@ -86,9 +90,9 @@ export function createBot(token) {
     await sendStartMessage(ctx, text)
   })
 
-  // /buy — отправить счёт на пополнение BC за Telegram Stars.
+  // /buy — отправить счёт на пополнение BC за Telegram Stars (по умолчанию 100 ⭐ = 1000 BC).
   bot.command('buy', async (ctx) => {
-    const invoice = buildInvoice('buy_bc_1000')
+    const invoice = buildInvoiceByStars(100)
     if (!invoice) return
     try {
       await ctx.replyWithInvoice(invoice)
@@ -107,20 +111,17 @@ export function createBot(token) {
     }
   })
 
-  // Успешная оплата — начисляем BC.
+  // Успешная оплата — начисляем BC (stars * BC_PER_STAR).
   bot.on('successful_payment', async (ctx) => {
     try {
       const payment = ctx.message?.successful_payment
       const fromId = ctx.from?.id
       if (!payment || !fromId) return
-      const payload = payment.invoice_payload
-      const pack = STAR_PACKAGES[payload]
-      const stars = payment.total_amount ?? pack?.stars ?? 0
-      // Если суммы не совпали с пакетом — считаем BC по курсу 1 Star = 10 BC.
-      const bc = pack?.bc ?? stars * 10
+      const stars = payment.total_amount ?? 0
+      const bc = stars * BC_PER_STAR
       const updated = await creditStarsPurchase(fromId, stars, bc)
       if (updated) {
-        await ctx.reply(`✅ Оплата получена! Начислено ${bc} BC. Баланс: ${Number(updated.balance_bc).toLocaleString('ru-RU')} BC.`)
+        await ctx.reply(`✅ Оплата получена! Начислено ${bc} BC (${stars} ⭐). Баланс: ${Number(updated.balance_bc).toLocaleString('ru-RU')} BC.`)
       } else {
         console.error('[bot] successful_payment: пользователь не найден по telegram_id', fromId)
         await ctx.reply('✅ Оплата получена, но не удалось найти аккаунт. Напиши в поддержку.')

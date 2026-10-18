@@ -301,6 +301,7 @@ function App() {
   })
   const [referralVisits] = useState(loadReferralVisits)
   const [referralFeedback, setReferralFeedback] = useState('')
+  const [purchaseBcAmount, setPurchaseBcAmount] = useState('1000')
   const [purchaseFeedback, setPurchaseFeedback] = useState<{ kind: 'error' | 'success'; text: string } | null>(null)
   const [topUpCode, setTopUpCode] = useState('')
   const [topUpMessage, setTopUpMessage] = useState('')
@@ -805,9 +806,14 @@ function App() {
       setPurchaseFeedback({ kind: 'error', text: 'Оплата Stars доступна только внутри Telegram. Откройте приложение в Telegram.' })
       return
     }
+    const amountBc = Number(purchaseBcAmount)
+    if (!Number.isFinite(amountBc) || amountBc <= 0) {
+      setPurchaseFeedback({ kind: 'error', text: 'Укажите сумму BC больше нуля.' })
+      return
+    }
     setPurchaseFeedback(null)
     try {
-      const { invoiceLink, bc } = await api.buyStars('buy_bc_1000')
+      const { invoiceLink, bc } = await api.buyStars(amountBc)
       tg.openInvoice(invoiceLink, (status) => {
         if (status === 'paid') {
           // Начисление делает бот (successful_payment). Подтягиваем актуальный профиль.
@@ -1793,11 +1799,16 @@ function App() {
         <section className="section-view economy-view">
           <div className="section-heading"><div><h2>Покупка BC</h2><p>Пополнение демо-баланса</p></div></div>
           <section className="economy-card purchase-card">
-            <div className="purchase-rate"><span>Курс обмена</span><strong>100 ⭐ = 1 000 BC</strong></div>
-            <div className="purchase-preview"><span>Пакет</span><strong>1 000 BC</strong></div>
+            <div className="purchase-rate"><span>Курс обмена</span><strong>10 BC = 1 ⭐</strong></div>
+            <label className="game-field-label" htmlFor="purchase-bc">Сумма пополнения (BC)</label>
+            <div className="purchase-input-row">
+              <input id="purchase-bc" type="number" min="10" step="10" value={purchaseBcAmount} onChange={(event) => { setPurchaseBcAmount(event.target.value); setPurchaseFeedback(null) }} />
+              <span>BC</span>
+            </div>
+            <div className="purchase-preview"><span>К оплате</span><strong>{formatBalance(Math.max(0, Math.ceil(Number(purchaseBcAmount) / 10) || 0))} ⭐</strong></div>
             {purchaseFeedback && <p className={`purchase-feedback ${purchaseFeedback.kind}`} role={purchaseFeedback.kind === 'error' ? 'alert' : 'status'}>{purchaseFeedback.text}</p>}
             <button className="game-action-button" onClick={buyBcStars}>Пополнить за Stars</button>
-            <p className="economy-note">Оплата Telegram Stars. 100 ⭐ = 1 000 BC. Начисление приходит сразу после оплаты.</p>
+            <p className="economy-note">Оплата Telegram Stars. 10 BC = 1 ⭐ (округление вверх). Начисление приходит сразу после оплаты.</p>
           </section>
 
           <div className="section-heading history-heading"><div><h2>История пополнений</h2><p>Покупки за звёзды</p></div></div>

@@ -195,7 +195,7 @@ export const api = {
     request<{ withdrawals: AdminWithdrawalItem[] }>('/api/admin/withdrawals'),
   adminSetWithdrawal: (code: string, status: 'approved' | 'rejected' | 'paid') =>
     request<{ withdrawal: AdminWithdrawalItem }>('/api/admin/withdrawals', { code, status }),
-  // Пополнение за Telegram Stars: получить invoice-ссылку для openInvoice.
-  buyStars: (payload: string) =>
-    request<{ invoiceLink: string; stars: number; bc: number }>('/api/buy', { payload }),
+  // Пополнение за Telegram Stars: получить invoice-ссылку для openInvoice по сумме BC.
+  buyStars: (amountBc: number) =>
+    request<{ invoiceLink: string; stars: number; bc: number }>('/api/buy', { amountBc }),
 }

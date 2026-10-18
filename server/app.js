@@ -13,7 +13,7 @@ import {
   adminListPendingWithdrawals, adminSetWithdrawalStatus,
   creditStarsPurchase,
 } from './db.js'
-import { createBot, buildInvoice, STAR_PACKAGES } from './bot.js'
+import { createBot, buildInvoiceByStars, starsForBc, BC_PER_STAR, MIN_STARS, MAX_STARS } from './bot.js'
 
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN ?? ''
 
@@ -821,24 +821,32 @@ function getBot() {
 }
 
 // POST /api/buy — создать invoice-ссылку на пополнение BC за Stars.
-// Mini App открывает её через Telegram.WebApp.openInvoice(link).
+// Принимает amountBc (сумму BC). Звёзды считаются по курсу 1 Star = 10 BC.
 app.post('/api/buy', async (request, response) => {
   if (!ensureSupabase(response)) return
   const identity = getIdentity(request)
   if (identity.error) { response.status(401).json({ error: identity.error }); return }
 
-  const payload = String(request.body?.payload ?? 'buy_bc_1000')
-  if (!STAR_PACKAGES[payload]) { response.status(400).json({ error: 'Неизвестный пакет пополнения.' }); return }
+  const amountBc = Number(request.body?.amountBc)
+  if (!Number.isFinite(amountBc) || amountBc <= 0) {
+    response.status(400).json({ error: 'Укажите сумму BC больше нуля.' })
+    return
+  }
+  const stars = starsForBc(amountBc)
+  if (stars < MIN_STARS || stars > MAX_STARS) {
+    response.status(400).json({ error: `Слишком большая сумма. Максимум ${MAX_STARS * BC_PER_STAR} BC.` })
+    return
+  }
 
   const bot = getBot()
   if (!bot) { response.status(503).json({ error: 'Оплата Stars недоступна: не задан TELEGRAM_BOT_TOKEN.' }); return }
 
-  const invoice = buildInvoice(payload)
+  const invoice = buildInvoiceByStars(stars)
   if (!invoice) { response.status(400).json({ error: 'Не удалось собрать счёт.' }); return }
 
   try {
     const link = await bot.telegram.createInvoiceLink(invoice)
-    response.json({ invoiceLink: link, stars: STAR_PACKAGES[payload].stars, bc: STAR_PACKAGES[payload].bc })
+    response.json({ invoiceLink: link, stars, bc: stars * BC_PER_STAR })
   } catch (error) {
     console.error(error)
     response.status(502).json({ error: error instanceof Error ? error.message : 'Не удалось создать счёт.' })
