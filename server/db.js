@@ -496,6 +496,34 @@ export async function logPurchase(userId, stars, amountBc, status = 'paid') {
   await logTransaction(userId, 'purchase', amountBc, 'BC', { stars })
 }
 
+// Начислить BC по оплате Telegram Stars. Ищем пользователя по telegram_id (id в users),
+// увеличиваем balance_bc и total_deposited, пишем в payments (status='paid').
+// Возвращает обновлённую запись пользователя (или null, если пользователь не найден).
+export async function creditStarsPurchase(telegramId, stars, amountBc) {
+  const user = await getUserById(telegramId)
+  if (!user) return null
+
+  const { data: updated, error } = await supabaseAdmin
+    .from('users')
+    .update({
+      balance_bc: round2(Number(user.balance_bc) + Number(amountBc)),
+      total_deposited: round2(Number(user.total_deposited) + Number(amountBc)),
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', telegramId)
+    .select('*')
+    .single()
+  if (error) throw error
+
+  const { error: payError } = await supabaseAdmin
+    .from('payments')
+    .insert({ user_id: telegramId, stars, amount_bc: round2(amountBc), status: 'paid' })
+  if (payError) throw payError
+
+  await logTransaction(telegramId, 'purchase', amountBc, 'BC', { stars, source: 'telegram_stars' }).catch(() => {})
+  return updated
+}
+
 // Вспомогательное: сгенерировать код заявки вида WD-XXXX-XXXX.
 function generateWithdrawalCode() {
   const hex = () => Math.floor(Math.random() * 65536).toString(16).padStart(4, '0').toUpperCase()

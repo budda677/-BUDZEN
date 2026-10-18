@@ -4,8 +4,31 @@
 //   2) На Vercel — webhook: createBot() + api/telegram-webhook.js вызывает handleUpdate.
 import { Telegraf, Markup } from 'telegraf'
 import { HttpsProxyAgent } from 'https-proxy-agent'
+import { creditStarsPurchase } from './db.js'
 
 const MINI_APP_URL = process.env.MINI_APP_URL || 'https://budzen-lemon.vercel.app'
+
+// Пакеты пополнения BC за Telegram Stars (1 Star = 10 BC).
+// amount в invoice — это звёзды (XTR), BC начисляем = stars * 10.
+export const STAR_PACKAGES = {
+  buy_bc_1000: { stars: 100, bc: 1000, label: '1000 BC' },
+  buy_bc_2500: { stars: 250, bc: 2500, label: '2500 BC' },
+  buy_bc_5000: { stars: 500, bc: 5000, label: '5000 BC' },
+}
+
+// Собрать объект invoice для createInvoiceLink / replyWithInvoice.
+export function buildInvoice(payload) {
+  const pack = STAR_PACKAGES[payload]
+  if (!pack) return null
+  return {
+    title: `Пополнение BUDZEN`,
+    description: `Начисление ${pack.label} на игровой баланс`,
+    payload,
+    currency: 'XTR', // Telegram Stars
+    prices: [{ label: pack.label, amount: pack.stars }],
+    provider_token: '', // пустая строка для цифровых товаров (Stars)
+  }
+}
 
 function isValidMiniAppUrl(url) {
   try {
@@ -61,6 +84,50 @@ export function createBot(token) {
     const name = ctx.from?.first_name ? `, ${ctx.from.first_name}` : ''
     const text = `Привет${name} 👋\n\nДобро пожаловать в BUDZEN — твою игровую экономику.\nОбменивай валюты, участвуй в играх и зарабатывай BC.`
     await sendStartMessage(ctx, text)
+  })
+
+  // /buy — отправить счёт на пополнение BC за Telegram Stars.
+  bot.command('buy', async (ctx) => {
+    const invoice = buildInvoice('buy_bc_1000')
+    if (!invoice) return
+    try {
+      await ctx.replyWithInvoice(invoice)
+    } catch (error) {
+      console.error('[bot] Не удалось отправить инвойс:', error instanceof Error ? error.message : error)
+      await ctx.reply('Не удалось создать счёт. Попробуй позже или открой приложение.')
+    }
+  })
+
+  // Telegram требует ответить на pre_checkout_query в течение 10 секунд.
+  bot.on('pre_checkout_query', async (ctx) => {
+    try {
+      await ctx.answerPreCheckoutQuery(true)
+    } catch (error) {
+      console.error('[bot] Ошибка pre_checkout_query:', error instanceof Error ? error.message : error)
+    }
+  })
+
+  // Успешная оплата — начисляем BC.
+  bot.on('successful_payment', async (ctx) => {
+    try {
+      const payment = ctx.message?.successful_payment
+      const fromId = ctx.from?.id
+      if (!payment || !fromId) return
+      const payload = payment.invoice_payload
+      const pack = STAR_PACKAGES[payload]
+      const stars = payment.total_amount ?? pack?.stars ?? 0
+      // Если суммы не совпали с пакетом — считаем BC по курсу 1 Star = 10 BC.
+      const bc = pack?.bc ?? stars * 10
+      const updated = await creditStarsPurchase(fromId, stars, bc)
+      if (updated) {
+        await ctx.reply(`✅ Оплата получена! Начислено ${bc} BC. Баланс: ${Number(updated.balance_bc).toLocaleString('ru-RU')} BC.`)
+      } else {
+        console.error('[bot] successful_payment: пользователь не найден по telegram_id', fromId)
+        await ctx.reply('✅ Оплата получена, но не удалось найти аккаунт. Напиши в поддержку.')
+      }
+    } catch (error) {
+      console.error('[bot] Ошибка successful_payment:', error instanceof Error ? error.message : error)
+    }
   })
 
   bot.on('text', async (ctx) => {

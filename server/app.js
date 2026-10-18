@@ -11,7 +11,9 @@ import {
   getAllHistory,
   adminGiveBalanceByUsername, adminBanUserByUsername, adminUnbanUserByUsername,
   adminListPendingWithdrawals, adminSetWithdrawalStatus,
+  creditStarsPurchase,
 } from './db.js'
+import { createBot, buildInvoice, STAR_PACKAGES } from './bot.js'
 
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN ?? ''
 
@@ -801,6 +803,68 @@ app.post('/api/admin/withdrawals', async (request, response) => {
   } catch (error) {
     console.error(error)
     response.status(400).json({ error: error instanceof Error ? error.message : 'Не удалось обновить заявку.' })
+  }
+})
+
+// ---------------------------------------------------------------------------
+// Telegram Stars: пополнение BC.
+// ---------------------------------------------------------------------------
+
+// Ленивый singleton бота (для createInvoiceLink и обработки updates на Vercel).
+let _bot = null
+function getBot() {
+  if (_bot) return _bot
+  const token = process.env.TELEGRAM_BOT_TOKEN
+  if (!token) return null
+  _bot = createBot(token)
+  return _bot
+}
+
+// POST /api/buy — создать invoice-ссылку на пополнение BC за Stars.
+// Mini App открывает её через Telegram.WebApp.openInvoice(link).
+app.post('/api/buy', async (request, response) => {
+  if (!ensureSupabase(response)) return
+  const identity = getIdentity(request)
+  if (identity.error) { response.status(401).json({ error: identity.error }); return }
+
+  const payload = String(request.body?.payload ?? 'buy_bc_1000')
+  if (!STAR_PACKAGES[payload]) { response.status(400).json({ error: 'Неизвестный пакет пополнения.' }); return }
+
+  const bot = getBot()
+  if (!bot) { response.status(503).json({ error: 'Оплата Stars недоступна: не задан TELEGRAM_BOT_TOKEN.' }); return }
+
+  const invoice = buildInvoice(payload)
+  if (!invoice) { response.status(400).json({ error: 'Не удалось собрать счёт.' }); return }
+
+  try {
+    const link = await bot.telegram.createInvoiceLink(invoice)
+    response.json({ invoiceLink: link, stars: STAR_PACKAGES[payload].stars, bc: STAR_PACKAGES[payload].bc })
+  } catch (error) {
+    console.error(error)
+    response.status(502).json({ error: error instanceof Error ? error.message : 'Не удалось создать счёт.' })
+  }
+})
+
+// POST /api/telegram/webhook — принимает updates от Telegram (команды и платежи).
+// Нужен, чтобы на Vercel работали /buy, pre_checkout_query и successful_payment.
+app.post('/api/telegram/webhook', async (request, response) => {
+  // Необязательная защита: секретный заголовок Telegram (если задан TELEGRAM_WEBHOOK_SECRET).
+  const secret = process.env.TELEGRAM_WEBHOOK_SECRET
+  if (secret && request.get('x-telegram-bot-api-secret-token') !== secret) {
+    response.status(401).json({ error: 'Недействительный секрет вебхука.' })
+    return
+  }
+  const bot = getBot()
+  if (!bot) { response.status(503).json({ error: 'Бот не настроен.' }); return }
+  try {
+    // Не ждём обработку: подтверждаем Telegram сразу, чтобы не было ретраев.
+    void bot.handleUpdate(request.body).catch((error) => {
+      console.error('[webhook] Ошибка обработки update:', error instanceof Error ? error.message : error)
+    })
+    response.json({ ok: true })
+  } catch (error) {
+    console.error(error)
+    response.status(500).json({ error: 'Ошибка обработки вебхука.' })
   }
 })
 

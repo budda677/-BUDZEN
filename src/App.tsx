@@ -301,7 +301,6 @@ function App() {
   })
   const [referralVisits] = useState(loadReferralVisits)
   const [referralFeedback, setReferralFeedback] = useState('')
-  const [purchaseStars, setPurchaseStars] = useState('100')
   const [purchaseFeedback, setPurchaseFeedback] = useState<{ kind: 'error' | 'success'; text: string } | null>(null)
   const [topUpCode, setTopUpCode] = useState('')
   const [topUpMessage, setTopUpMessage] = useState('')
@@ -369,7 +368,6 @@ function App() {
   const nextDailyReward = nextStreak % 7 === 0 ? streakBonusAmount : dailyBonusAmount
   const displayedStreak = dailyClaimedToday ? dailyBonus.streak : consecutiveStreak
   const streakDay = displayedStreak > 0 ? ((displayedStreak - 1) % 7) + 1 : 0
-  const purchaseAmount = Number(purchaseStars) * 10
   const referralLink = `${window.location.origin}${window.location.pathname}?ref=${referralCode}`
   const achievements = achievementsData.length > 0 ? achievementsData : [
     { title: 'Первый бонус', description: 'Получи ежедневный бонус', progress: dailyBonus.streak > 0 ? 1 : 0, target: 1 },
@@ -798,19 +796,30 @@ function App() {
     }
   }
 
-  async function buyDemoBc() {
-    const stars = Number(purchaseStars)
-    if (!Number.isInteger(stars) || stars <= 0) {
-      setPurchaseFeedback({ kind: 'error', text: 'Укажите целое количество звёзд больше нуля.' })
+    async function buyBcStars() {
+    // Реальная оплата через Telegram Stars: получаем invoice-ссылку и открываем платёжное окно.
+    const tg = (window as Window & {
+      Telegram?: { WebApp?: { openInvoice?: (url: string, cb?: (status: string) => void) => void; initDataUnsafe?: { user?: TelegramUser } } }
+    }).Telegram?.WebApp
+    if (!tg?.openInvoice) {
+      setPurchaseFeedback({ kind: 'error', text: 'Оплата Stars доступна только внутри Telegram. Откройте приложение в Telegram.' })
       return
     }
-
+    setPurchaseFeedback(null)
     try {
-      const result = await api.purchase(stars)
-      setProfile(result.profile)
-      setPurchaseFeedback({ kind: 'success', text: `Зачислено ${formatBalance(result.amount)} BC за ${formatBalance(stars)} ⭐.` })
+      const { invoiceLink, bc } = await api.buyStars('buy_bc_1000')
+      tg.openInvoice(invoiceLink, (status) => {
+        if (status === 'paid') {
+          // Начисление делает бот (successful_payment). Подтягиваем актуальный профиль.
+          setPurchaseFeedback({ kind: 'success', text: `Оплата прошла! Начислено ${formatBalance(bc)} BC.` })
+          void api.auth().then((r) => setProfile(r.profile)).catch(() => {})
+        } else if (status === 'failed') {
+          setPurchaseFeedback({ kind: 'error', text: 'Оплата не прошла. Попробуйте ещё раз.' })
+        }
+        // 'cancelled' — пользователь закрыл окно, молчим.
+      })
     } catch (error) {
-      setPurchaseFeedback({ kind: 'error', text: error instanceof Error ? error.message : 'Не удалось выполнить покупку.' })
+      setPurchaseFeedback({ kind: 'error', text: error instanceof Error ? error.message : 'Не удалось создать счёт.' })
     }
   }
 
@@ -1785,15 +1794,10 @@ function App() {
           <div className="section-heading"><div><h2>Покупка BC</h2><p>Пополнение демо-баланса</p></div></div>
           <section className="economy-card purchase-card">
             <div className="purchase-rate"><span>Курс обмена</span><strong>100 ⭐ = 1 000 BC</strong></div>
-            <label className="game-field-label" htmlFor="purchase-stars">Количество звёзд</label>
-            <div className="purchase-input-row">
-              <input id="purchase-stars" type="number" min="1" step="1" value={purchaseStars} onChange={(event) => { setPurchaseStars(event.target.value); setPurchaseFeedback(null) }} />
-              <span>⭐</span>
-            </div>
-            <div className="purchase-preview"><span>Начислим</span><strong>{formatBalance(Number.isInteger(Number(purchaseStars)) && Number(purchaseStars) > 0 ? purchaseAmount : 0)} BC</strong></div>
+            <div className="purchase-preview"><span>Пакет</span><strong>1 000 BC</strong></div>
             {purchaseFeedback && <p className={`purchase-feedback ${purchaseFeedback.kind}`} role={purchaseFeedback.kind === 'error' ? 'alert' : 'status'}>{purchaseFeedback.text}</p>}
-            <button className="game-action-button" onClick={buyDemoBc}>Купить BC</button>
-            <p className="economy-note">Демо-покупка без ограничений. Звёзды не списываются.</p>
+            <button className="game-action-button" onClick={buyBcStars}>Пополнить за Stars</button>
+            <p className="economy-note">Оплата Telegram Stars. 100 ⭐ = 1 000 BC. Начисление приходит сразу после оплаты.</p>
           </section>
 
           <div className="section-heading history-heading"><div><h2>История пополнений</h2><p>Покупки за звёзды</p></div></div>
