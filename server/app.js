@@ -865,14 +865,15 @@ app.post('/api/telegram/webhook', async (request, response) => {
   const bot = getBot()
   if (!bot) { response.status(503).json({ error: 'Бот не настроен.' }); return }
   try {
-    // Не ждём обработку: подтверждаем Telegram сразу, чтобы не было ретраев.
-    void bot.handleUpdate(request.body).catch((error) => {
-      console.error('[webhook] Ошибка обработки update:', error instanceof Error ? error.message : error)
-    })
+    // ВАЖНО: дожидаемся обработки, а не отвечаем сразу.
+    // Иначе на Vercel функция завершится раньше, чем Telegraf успеет отправить
+    // answerPreCheckoutQuery в Telegram, и Telegram сочтёт платёж неотвеченным (ошибка оплаты).
+    await bot.handleUpdate(request.body)
     response.json({ ok: true })
   } catch (error) {
-    console.error(error)
-    response.status(500).json({ error: 'Ошибка обработки вебхука.' })
+    console.error('[webhook] Ошибка обработки update:', error instanceof Error ? error.message : error)
+    // Даже при ошибке отвечаем 200, чтобы Telegram не зациклил ретраи.
+    response.json({ ok: true })
   }
 })
 
