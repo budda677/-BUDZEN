@@ -309,7 +309,7 @@ button { font: inherit; cursor: pointer; }
 .game-heading { margin-bottom: 16px; }
 .game-panel { padding: 18px; border: 1px solid #50316c; border-radius: 14px; background: linear-gradient(125deg, #21152f, #15111c 75%); }
 .upgrade-wheel-wrap { position: relative; width: min(100%, 340px); margin: 0 auto 12px; }
-.upgrade-wheel { width: 100%; aspect-ratio: 1; }
+.upgrade-wheel { width: 100%; aspect-ratio: 1; position: relative; }
 .upgrade-wheel svg { display: block; width: 100%; height: 100%; overflow: visible; }
 .upgrade-wheel-motion { transform-box: view-box; transform-origin: center; }
 .upgrade-wheel-ticks { fill: none; stroke: #403649; stroke-width: 2; stroke-dasharray: 1 11; }
@@ -319,8 +319,33 @@ button { font: inherit; cursor: pointer; }
 .upgrade-chevron.bright { fill: #bd8aff; }
 .upgrade-chevron.dim { fill: #7952a2; }
 .upgrade-wheel-chance-label { fill: #f3e8ff; font-family: inherit; font-size: 21px; font-weight: 800; }
-.upgrade-wheel-pointer { fill: #e8b94e; filter: drop-shadow(0 0 7px #e8b94e99); transform-box: view-box; transform-origin: center; }
-.upgrade-wheel-pointer.is-spinning { animation: upgrader-pointer-spin var(--spin-duration, 6000ms) cubic-bezier(.12,.72,.14,1) both; }
+
+/* Указатель-стрелка вынесен из SVG в отдельный div: анимируется transform: rotate()
+   на HTML-элементе через GPU-композитор — плавно (60 FPS), без «дрожания» SVG. */
+.upgrade-wheel-needle {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  transform-origin: 50% 50%;
+  will-change: transform;
+  backface-visibility: hidden;
+  transform: rotate(0deg);
+}
+.upgrade-wheel-needle.is-spinning {
+  animation: upgrader-pointer-spin var(--spin-duration, 6000ms) cubic-bezier(.12,.72,.14,1) both;
+}
+.upgrade-wheel-needle-tri {
+  position: absolute;
+  left: 50%;
+  top: 86.5%;
+  width: 0;
+  height: 0;
+  transform: translateX(-50%);
+  border-left: 8px solid transparent;
+  border-right: 8px solid transparent;
+  border-top: 16px solid #e8b94e;
+  filter: drop-shadow(0 0 7px #e8b94e99);
+}
 .upgrade-game-details { width: min(100%, 420px); margin: 0 auto; }
 .upgrade-balance-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 18px; padding: 10px 12px; border: 1px solid #49365a; border-radius: 9px; background: #100c16; }
 .upgrade-balance-row > div { display: grid; gap: 4px; }
@@ -396,7 +421,7 @@ button { font: inherit; cursor: pointer; }
 @keyframes crash-road-flow { to { stroke-dashoffset: -42; } }
 @keyframes upgrader-pointer-spin {
   from { transform: rotate(0deg); }
-  to { transform: rotate(var(--pointer-spin-angle, 1800deg)); }
+  to { transform: rotate(var(--needle-angle, 1800deg)); }
 }
 .portfolio-balance { margin-bottom: 30px; }
 .portfolio-currencies-heading { margin-top: 0; }

@@ -578,13 +578,22 @@ function App() {
 
     setUpgradeError('')
     setUpgradeResult(null)
-    setUpgradeSpinDuration(spinDuration)
     setUpgradeSpinning(true)
 
     try {
+      // Сначала дожидаемся ответа сервера, и только потом задаём финальный угол и
+      // запускаем анимацию ОДНИМ перерисовыванием. Иначе смена угла посреди уже
+      // идущего CSS-перехода даёт рывок («откат назад и доезд»).
       const result = await api.upgrade(wager, chance)
       setProfile(result.profile)
-      setUpgradeSpinAngle(1800 + (Math.random() * 2 - 1) * 160)
+
+      // Копим угол, чтобы колесо всегда крутилось вперёд (не откатывалось назад).
+      setUpgradeSpinAngle((prev) => {
+        const base = Math.ceil(prev / 3600) * 3600 // ближайший «полный оборот» вперёд
+        return base + 1800 + (Math.random() * 2 - 1) * 160
+      })
+      setUpgradeSpinDuration(spinDuration)
+
       window.setTimeout(() => {
         setQuestState((state) => ({ ...state, upgraderCompleted: true }))
         setUpgradeResult({ won: result.won, payout: result.payout, stake: wager })
@@ -1235,12 +1244,14 @@ function App() {
                         <path d="M126 177 160 152l34 25v14l-34-25-34 25z" className="upgrade-chevron dim" />
                         <text x="160" y="223" className="upgrade-wheel-chance-label" textAnchor="middle">{selectedChance}%</text>
                       </g>
-                      <path
-                        d="m160 277-9 20 9-5 9 5z"
-                        className={upgradeSpinning ? 'upgrade-wheel-pointer is-spinning' : 'upgrade-wheel-pointer'}
-                        style={{ '--pointer-spin-angle': `${upgradeSpinAngle}deg`, '--spin-duration': `${upgradeSpinDuration}ms`, ...(!upgradeSpinning ? { transform: `rotate(${upgradeSpinAngle % 360}deg)` } : {}) } as React.CSSProperties}
-                      />
                     </svg>
+                    <div
+                      className={upgradeSpinning ? 'upgrade-wheel-needle is-spinning' : 'upgrade-wheel-needle'}
+                      style={{ '--needle-angle': `${upgradeSpinAngle}deg`, '--spin-duration': `${upgradeSpinDuration}ms`, ...(!upgradeSpinning ? { transform: `rotate(${upgradeSpinAngle % 360}deg)` } : {}) } as React.CSSProperties}
+                      aria-hidden="true"
+                    >
+                      <span className="upgrade-wheel-needle-tri" />
+                    </div>
                   </div>
                 </div>
 
