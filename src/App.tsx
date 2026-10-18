@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import {
   api, type PublicProfile, type RatePoint,
@@ -51,13 +51,13 @@ const questStorageKey = 'budzen-demo-quests'
 const referralVisitsStorageKey = 'budzen-demo-referral-visits'
 const referralVisitSeenStorageKey = 'budzen-demo-referral-visit-seen'
 const profileAvatarStorageKey = 'budzen-demo-profile-avatar'
+const lastBalanceStorageKey = 'budzen-demo-last-bc-balance'
 const referralCode = 'BUDZEN8951066218'
 const incomingReferralVisit = new URLSearchParams(window.location.search).get('ref') === referralCode
 const dailyBonusAmount = 10
 const streakBonusAmount = 50
 const questRewardAmount = 5
 const transferFeeRate = 0.02
-const startingBalance = 1000
 const startingCurrencyBalances: CurrencyBalances = { A: 1000, B: 500 }
 const upgradeWheelCircumference = 2 * Math.PI * 116
 const exchangeAssets: { ticker: ExchangeTicker; name: string }[] = [
@@ -129,6 +129,20 @@ function loadCurrencyBalances(): CurrencyBalances {
   }
 
   return { ...startingCurrencyBalances }
+}
+
+// Последний известный реальный баланс BC — чтобы при повторном заходе не мелькало ложное «1000».
+function loadLastBalance(): number | null {
+  try {
+    const saved = window.localStorage.getItem(lastBalanceStorageKey)
+    if (saved != null) {
+      const value = Number(saved)
+      if (Number.isFinite(value) && value >= 0) return value
+    }
+  } catch {
+    // storage недоступен — считаем, что кэша нет.
+  }
+  return null
 }
 
 function loadDailyBonus(): DailyBonusState {
@@ -250,7 +264,10 @@ function App() {
   const [selectedTicker, setSelectedTicker] = useState<RateTicker>('A')
   const [selectedChance, setSelectedChance] = useState(50)
   const [chanceEntry, setChanceEntry] = useState('50')
-  const demoBalance = profile ? profile.balanceBc : startingBalance
+  // Пока профиль не загружен: показываем последний известный баланс (кэш),
+  // иначе 0 — чтобы не мелькало ложное «1000» до прихода реальных данных.
+  const cachedBalance = useMemo(loadLastBalance, [])
+  const demoBalance = profile ? profile.balanceBc : cachedBalance ?? 0
   const [currencyBalances, setCurrencyBalances] = useState(loadCurrencyBalances)
   const [exchangeFrom, setExchangeFrom] = useState<ExchangeTicker>('BC')
   const [exchangeTo, setExchangeTo] = useState<ExchangeTicker>('A')
@@ -383,6 +400,17 @@ function App() {
       // Keep demo currency balances for the current session when storage is unavailable.
     }
   }, [currencyBalances])
+
+  // Запоминаем реальный баланс BC, чтобы при следующем заходе сразу показывать его,
+  // а не стартовые «1000» до прихода ответа сервера.
+  useEffect(() => {
+    if (!profile) return
+    try {
+      window.localStorage.setItem(lastBalanceStorageKey, String(profile.balanceBc))
+    } catch {
+      // storage недоступен — работаем без кэша баланса.
+    }
+  }, [profile])
 
   useEffect(() => {
     try {
