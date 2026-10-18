@@ -185,12 +185,12 @@ export const api = {
   historyAll: (userId: string) =>
     request<{ items: HistoryEntry[] }>(`/api/history/all?userId=${encodeURIComponent(userId)}`),
   // --- Админ-панель (доступ проверяется на сервере по Telegram ID) ---
-  adminGiveBalance: (targetId: string, currency: 'BC' | 'A' | 'B', amount: number) =>
-    request<{ profile: PublicProfile }>('/api/admin/give-balance', { targetId, currency, amount }),
-  adminBan: (targetId: string, reason: string) =>
-    request<{ profile: PublicProfile }>('/api/admin/ban', { targetId, reason }),
-  adminUnban: (targetId: string) =>
-    request<{ profile: PublicProfile }>('/api/admin/unban', { targetId }),
+  adminGiveBalance: (username: string, currency: 'BC' | 'A' | 'B', amount: number) =>
+    request<{ profile: PublicProfile }>('/api/admin/give-balance', { username, currency, amount }),
+  adminBan: (username: string, reason: string) =>
+    request<{ profile: PublicProfile }>('/api/admin/ban', { username, reason }),
+  adminUnban: (username: string) =>
+    request<{ profile: PublicProfile }>('/api/admin/unban', { username }),
   adminWithdrawals: () =>
     request<{ withdrawals: AdminWithdrawalItem[] }>('/api/admin/withdrawals'),
   adminSetWithdrawal: (code: string, status: 'approved' | 'rejected' | 'paid') =>

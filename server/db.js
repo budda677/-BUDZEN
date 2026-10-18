@@ -599,3 +599,38 @@ export async function adminSetWithdrawalStatus(code, status) {
     createdAt: data.created_at,
   }
 }
+
+// Найти пользователя по username (без @, регистронезависимо). Возвращает запись или null.
+export async function findUserByUsername(username) {
+  const clean = String(username ?? '').trim().replace(/^@/, '')
+  if (!clean) throw new Error('Укажите username.')
+  // username хранится как есть из Telegram (без @). Postgres ILIKE через ilike() даёт регистронезависимый поиск.
+  const { data, error } = await supabaseAdmin
+    .from('users')
+    .select('*')
+    .ilike('username', clean)
+    .maybeSingle()
+  if (error) throw error
+  return data
+}
+
+// Начислить/списать баланс игроку по username.
+export async function adminGiveBalanceByUsername(username, currency, amount) {
+  const user = await findUserByUsername(username)
+  if (!user) throw new Error('Игрок с таким username не найден.')
+  return adminGiveBalance(String(user.id), currency, amount)
+}
+
+// Забанить игрока по username.
+export async function adminBanUserByUsername(username, reason) {
+  const user = await findUserByUsername(username)
+  if (!user) throw new Error('Игрок с таким username не найден.')
+  return adminBanUser(String(user.id), reason)
+}
+
+// Разбанить игрока по username.
+export async function adminUnbanUserByUsername(username) {
+  const user = await findUserByUsername(username)
+  if (!user) throw new Error('Игрок с таким username не найден.')
+  return adminUnbanUser(String(user.id))
+}

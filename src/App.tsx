@@ -262,11 +262,11 @@ function App() {
   const [profile, setProfile] = useState<PublicProfile | null>(null)
 
   // --- Состояние админ-панели (только для админа) ---
-  const [adminGiveId, setAdminGiveId] = useState('')
+  const [adminGiveUsername, setAdminGiveUsername] = useState('')
   const [adminGiveCurrency, setAdminGiveCurrency] = useState<'BC' | 'A' | 'B'>('BC')
   const [adminGiveAmount, setAdminGiveAmount] = useState('100')
   const [adminGiveMsg, setAdminGiveMsg] = useState<{ kind: 'error' | 'success'; text: string } | null>(null)
-  const [adminBanId, setAdminBanId] = useState('')
+  const [adminBanUsername, setAdminBanUsername] = useState('')
   const [adminBanReason, setAdminBanReason] = useState('')
   const [adminBanMsg, setAdminBanMsg] = useState<{ kind: 'error' | 'success'; text: string } | null>(null)
   const [adminWithdrawals, setAdminWithdrawals] = useState<AdminWithdrawalItem[]>([])
@@ -712,26 +712,26 @@ function App() {
 
   // --- Админ-действия ---
   async function adminGive() {
-    const targetId = adminGiveId.trim()
+    const username = adminGiveUsername.trim().replace(/^@/, '')
     const amount = Number(adminGiveAmount)
-    if (!/^\d{1,24}$/.test(targetId)) { setAdminGiveMsg({ kind: 'error', text: 'Введите корректный ID игрока.' }); return }
+    if (!username) { setAdminGiveMsg({ kind: 'error', text: 'Введите username игрока.' }); return }
     if (!Number.isFinite(amount) || amount === 0) { setAdminGiveMsg({ kind: 'error', text: 'Введите ненулевую сумму.' }); return }
     try {
-      await api.adminGiveBalance(targetId, adminGiveCurrency, amount)
-      setAdminGiveMsg({ kind: 'success', text: `Готово: ${amount > 0 ? 'начислено' : 'списано'} ${Math.abs(amount)} ${adminGiveCurrency} игроку ${targetId}.` })
-      setAdminGiveId('')
+      await api.adminGiveBalance(username, adminGiveCurrency, amount)
+      setAdminGiveMsg({ kind: 'success', text: `Готово: ${amount > 0 ? 'начислено' : 'списано'} ${Math.abs(amount)} ${adminGiveCurrency} игроку @${username}.` })
+      setAdminGiveUsername('')
     } catch (error) {
       setAdminGiveMsg({ kind: 'error', text: error instanceof Error ? error.message : 'Не удалось начислить баланс.' })
     }
   }
 
   async function adminBan() {
-    const targetId = adminBanId.trim()
-    if (!/^\d{1,24}$/.test(targetId)) { setAdminBanMsg({ kind: 'error', text: 'Введите корректный ID игрока.' }); return }
+    const username = adminBanUsername.trim().replace(/^@/, '')
+    if (!username) { setAdminBanMsg({ kind: 'error', text: 'Введите username игрока.' }); return }
     try {
-      await api.adminBan(targetId, adminBanReason.trim())
-      setAdminBanMsg({ kind: 'success', text: `Игрок ${targetId} забанен.` })
-      setAdminBanId('')
+      await api.adminBan(username, adminBanReason.trim())
+      setAdminBanMsg({ kind: 'success', text: `Игрок @${username} забанен.` })
+      setAdminBanUsername('')
       setAdminBanReason('')
     } catch (error) {
       setAdminBanMsg({ kind: 'error', text: error instanceof Error ? error.message : 'Не удалось забанить.' })
@@ -739,12 +739,12 @@ function App() {
   }
 
   async function adminUnban() {
-    const targetId = adminBanId.trim()
-    if (!/^\d{1,24}$/.test(targetId)) { setAdminBanMsg({ kind: 'error', text: 'Введите корректный ID игрока.' }); return }
+    const username = adminBanUsername.trim().replace(/^@/, '')
+    if (!username) { setAdminBanMsg({ kind: 'error', text: 'Введите username игрока.' }); return }
     try {
-      await api.adminUnban(targetId)
-      setAdminBanMsg({ kind: 'success', text: `Игрок ${targetId} разбанен.` })
-      setAdminBanId('')
+      await api.adminUnban(username)
+      setAdminBanMsg({ kind: 'success', text: `Игрок @${username} разбанен.` })
+      setAdminBanUsername('')
       setAdminBanReason('')
     } catch (error) {
       setAdminBanMsg({ kind: 'error', text: error instanceof Error ? error.message : 'Не удалось разбанить.' })
@@ -1475,9 +1475,9 @@ function App() {
           {/* Форма 1: выдать баланс */}
           <section className="economy-card admin-card">
             <h3>Выдать баланс</h3>
-            <label className="game-field-label" htmlFor="admin-give-id">ID игрока</label>
+            <label className="game-field-label" htmlFor="admin-give-id">Username (тег)</label>
             <div className="exchange-input-row">
-              <input id="admin-give-id" type="text" inputMode="numeric" placeholder="Telegram ID" value={adminGiveId} onChange={(event) => { setAdminGiveId(event.target.value); setAdminGiveMsg(null) }} />
+              <input id="admin-give-id" type="text" autoCapitalize="none" autoCorrect="off" placeholder="budda677 (без @)" value={adminGiveUsername} onChange={(event) => { setAdminGiveUsername(event.target.value); setAdminGiveMsg(null) }} />
             </div>
             <label className="game-field-label" htmlFor="admin-give-currency">Валюта</label>
             <select id="admin-give-currency" className="admin-select" value={adminGiveCurrency} onChange={(event) => setAdminGiveCurrency(event.target.value as 'BC' | 'A' | 'B')}>
@@ -1496,9 +1496,9 @@ function App() {
           {/* Форма 2: забанить / разбанить */}
           <section className="economy-card admin-card">
             <h3>Забанить / Разбанить</h3>
-            <label className="game-field-label" htmlFor="admin-ban-id">ID игрока</label>
+            <label className="game-field-label" htmlFor="admin-ban-id">Username (тег)</label>
             <div className="exchange-input-row">
-              <input id="admin-ban-id" type="text" inputMode="numeric" placeholder="Telegram ID" value={adminBanId} onChange={(event) => { setAdminBanId(event.target.value); setAdminBanMsg(null) }} />
+              <input id="admin-ban-id" type="text" autoCapitalize="none" autoCorrect="off" placeholder="budda677 (без @)" value={adminBanUsername} onChange={(event) => { setAdminBanUsername(event.target.value); setAdminBanMsg(null) }} />
             </div>
             <label className="game-field-label" htmlFor="admin-ban-reason">Причина</label>
             <div className="exchange-input-row">

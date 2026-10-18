@@ -9,7 +9,7 @@ import {
   adjustBalance, logTransaction, setAchievementProgress, logPurchase,
   getExchangeHistory, getTransferHistory, getBonusHistory, getPurchaseHistory, getGameHistory,
   getAllHistory,
-  adminGiveBalance, adminBanUser, adminUnbanUser,
+  adminGiveBalanceByUsername, adminBanUserByUsername, adminUnbanUserByUsername,
   adminListPendingWithdrawals, adminSetWithdrawalStatus,
 } from './db.js'
 
@@ -98,7 +98,24 @@ async function getOrCreateUser(userId, tg) {
     .eq('id', userId)
     .maybeSingle()
   if (error) throw error
-  if (existing) return existing
+  if (existing) {
+    // Обновляем username/имя/фото из Telegram, если они изменились (например, юзер сменил @тег).
+    if (tg && (tg.username ?? null) !== existing.username) {
+      const { data: refreshed } = await supabase
+        .from('users')
+        .update({
+          username: tg.username ?? null,
+          first_name: tg.first_name ?? existing.first_name,
+          last_name: tg.last_name ?? existing.last_name,
+          photo_url: tg.photo_url ?? existing.photo_url,
+        })
+        .eq('id', userId)
+        .select('*')
+        .single()
+      if (refreshed) return refreshed
+    }
+    return existing
+  }
 
   const insert = {
     id: Number(userId),
@@ -698,21 +715,21 @@ function requireAdmin(request, response) {
   return identity
 }
 
-// POST /api/admin/give-balance — начислить/списать баланс игроку.
+// POST /api/admin/give-balance — начислить/списать баланс игроку (по username).
 app.post('/api/admin/give-balance', async (request, response) => {
   if (!ensureSupabase(response)) return
   if (!requireAdmin(request, response)) return
 
-  const targetId = String(request.body?.targetId ?? '').trim()
+  const username = String(request.body?.username ?? '').trim().replace(/^@/, '')
   const currency = request.body?.currency
   const amount = Number(request.body?.amount)
 
-  if (!/^\d{1,24}$/.test(targetId)) { response.status(400).json({ error: 'Некорректный ID игрока.' }); return }
+  if (!username) { response.status(400).json({ error: 'Укажите username игрока.' }); return }
   if (!['BC', 'A', 'B'].includes(currency)) { response.status(400).json({ error: 'Некорректная валюта.' }); return }
   if (!Number.isFinite(amount) || amount === 0) { response.status(400).json({ error: 'Сумма должна быть ненулевой.' }); return }
 
   try {
-    const updated = await adminGiveBalance(targetId, currency, amount)
+    const updated = await adminGiveBalanceByUsername(username, currency, amount)
     response.json({ profile: publicProfile(updated) })
   } catch (error) {
     console.error(error)
@@ -720,17 +737,17 @@ app.post('/api/admin/give-balance', async (request, response) => {
   }
 })
 
-// POST /api/admin/ban — забанить игрока.
+// POST /api/admin/ban — забанить игрока (по username).
 app.post('/api/admin/ban', async (request, response) => {
   if (!ensureSupabase(response)) return
   if (!requireAdmin(request, response)) return
 
-  const targetId = String(request.body?.targetId ?? '').trim()
+  const username = String(request.body?.username ?? '').trim().replace(/^@/, '')
   const reason = String(request.body?.reason ?? '').trim()
-  if (!/^\d{1,24}$/.test(targetId)) { response.status(400).json({ error: 'Некорректный ID игрока.' }); return }
+  if (!username) { response.status(400).json({ error: 'Укажите username игрока.' }); return }
 
   try {
-    const updated = await adminBanUser(targetId, reason)
+    const updated = await adminBanUserByUsername(username, reason)
     response.json({ profile: publicProfile(updated) })
   } catch (error) {
     console.error(error)
@@ -738,16 +755,16 @@ app.post('/api/admin/ban', async (request, response) => {
   }
 })
 
-// POST /api/admin/unban — разбанить игрока.
+// POST /api/admin/unban — разбанить игрока (по username).
 app.post('/api/admin/unban', async (request, response) => {
   if (!ensureSupabase(response)) return
   if (!requireAdmin(request, response)) return
 
-  const targetId = String(request.body?.targetId ?? '').trim()
-  if (!/^\d{1,24}$/.test(targetId)) { response.status(400).json({ error: 'Некорректный ID игрока.' }); return }
+  const username = String(request.body?.username ?? '').trim().replace(/^@/, '')
+  if (!username) { response.status(400).json({ error: 'Укажите username игрока.' }); return }
 
   try {
-    const updated = await adminUnbanUser(targetId)
+    const updated = await adminUnbanUserByUsername(username)
     response.json({ profile: publicProfile(updated) })
   } catch (error) {
     console.error(error)
