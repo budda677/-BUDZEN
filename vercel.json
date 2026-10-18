@@ -1,4 +1,4 @@
-{
+﻿{
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
@@ -6,10 +6,15 @@
     "api/index.js": {
       "maxDuration": 30,
       "memory": 1024
+    },
+    "api/telegram-webhook.js": {
+      "maxDuration": 30,
+      "memory": 1024
     }
   },
   "regions": ["sfo1"],
   "rewrites": [
-    { "source": "/api/(.*)", "destination": "/api/index.js" }
+    { "source": "/api/telegram-webhook", "destination": "/api/telegram-webhook" },
+    { "source": "/api/(?!(telegram-webhook)).*", "destination": "/api/index.js" }
   ]
 }
