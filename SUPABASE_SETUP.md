@@ -84,7 +84,7 @@ create table if not exists public.withdrawals (
   code        text not null unique,                          -- код заявки (WD-XXXX-XXXX)
   user_id     bigint not null references public.users(id),
   amount      numeric(18,2) not null check (amount > 0),
-  currency    text not null default 'BC' check (currency = 'BC'),
+  currency    text not null default 'A' check (currency in ('A','B')),
   status      text not null default 'pending'
               check (status in ('pending','approved','rejected','paid')),
   created_at  timestamptz not null default now()

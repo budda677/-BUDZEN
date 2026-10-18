@@ -156,8 +156,17 @@ export async function getAchievements(userId) {
   }))
 }
 
-// Создать заявку на вывод BC. Возвращает созданную запись.
-export async function createWithdrawal(userId, amount) {
+// Создать заявку на вывод валюты A или B. Возвращает созданную запись.
+// Вывод BC запрещён. Списывает нужную валюту с баланса пользователя.
+export async function createWithdrawal(userId, amount, currency) {
+  const cur = String(currency ?? '').toUpperCase()
+  if (cur !== 'A' && cur !== 'B') throw new Error('Вывод доступен только в валютах A и B.')
+  const field = cur === 'A' ? 'balance_a' : 'balance_b'
+
+  const user = await getUserById(userId)
+  if (!user) throw new Error('Пользователь не найден.')
+  if (Number(amount) > Number(user[field])) throw new Error(`Недостаточно ${cur} для вывода.`)
+
   const code = generateWithdrawalCode()
   const { data, error } = await supabaseAdmin
     .from('withdrawals')
@@ -165,12 +174,15 @@ export async function createWithdrawal(userId, amount) {
       code,
       user_id: userId,
       amount: round2(amount),
-      currency: 'BC',
+      currency: cur,
       status: 'pending',
     })
     .select('*')
     .single()
   if (error) throw error
+
+  // Списываем валюту с баланса.
+  await adjustBalance(userId, field, -Number(amount))
   return data
 }
 

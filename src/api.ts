@@ -49,7 +49,7 @@ export type AdminWithdrawalItem = {
   code: string
   userId: string
   amount: number
-  currency: 'BC'
+  currency: 'A' | 'B'
   status: 'pending' | 'approved' | 'rejected' | 'paid'
   createdAt: string
 }
@@ -57,7 +57,7 @@ export type AdminWithdrawalItem = {
 export type WithdrawalItem = {
   code: string
   amount: number
-  currency: 'BC'
+  currency: 'A' | 'B'
   status: 'pending' | 'approved' | 'rejected' | 'paid'
   createdAt: string
 }
@@ -156,8 +156,8 @@ export const api = {
     request<{ profile: PublicProfile; received: number; fee: number }>('/api/transfer', { recipient, amount }),
   listWithdrawals: (userId: string) =>
     request<{ withdrawals: WithdrawalItem[] }>(`/api/withdrawals?userId=${encodeURIComponent(userId)}`),
-  createWithdrawal: (amount: number) =>
-    request<{ withdrawal: WithdrawalItem; profile?: PublicProfile }>('/api/withdrawals', { amount, currency: 'BC' }),
+  createWithdrawal: (amount: number, currency: 'A' | 'B') =>
+    request<{ withdrawal: WithdrawalItem; profile?: PublicProfile }>('/api/withdrawals', { amount, currency }),
   dailyBonus: () =>
     request<{ profile: PublicProfile; reward: number }>('/api/bonus/daily', {}),
   purchase: (stars: number) =>

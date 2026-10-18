@@ -11,7 +11,7 @@ import {
   getAllHistory,
   adminGiveBalanceByUsername, adminBanUserByUsername, adminUnbanUserByUsername,
   adminListPendingWithdrawals, adminSetWithdrawalStatus,
-  creditStarsPurchase,
+  creditStarsPurchase, createWithdrawal,
 } from './db.js'
 import { createBot, buildInvoiceByStars, starsForBc, BC_PER_STAR, MIN_STARS, MAX_STARS } from './bot.js'
 
@@ -356,45 +356,28 @@ app.get('/api/withdrawals', async (request, response) => {
 // ---------------------------------------------------------------------------
 // POST /api/withdrawals
 // ---------------------------------------------------------------------------
-function generateCode() {
-  const hex = () => Math.floor(Math.random() * 65536).toString(16).padStart(4, '0').toUpperCase()
-  return `WD-${hex()}-${hex()}`
-}
-
 app.post('/api/withdrawals', async (request, response) => {
   if (!ensureSupabase(response)) return
   const identity = getIdentity(request)
   if (identity.error) { response.status(401).json({ error: identity.error }); return }
 
   const amount = Number(request.body?.amount)
-  const currency = request.body?.currency ?? 'BC'
+  const currency = String(request.body?.currency ?? 'A').toUpperCase()
   if (!Number.isFinite(amount) || amount <= 0) { response.status(400).json({ error: 'Сумма должна быть больше нуля.' }); return }
-  if (currency !== 'BC') { response.status(400).json({ error: 'Доступен вывод только в BC.' }); return }
+  if (currency !== 'A' && currency !== 'B') { response.status(400).json({ error: 'Вывод доступен только в валютах A и B.' }); return }
 
   try {
     const user = await getOrCreateUser(identity.userId, identity.tg)
     if (blockedIfBanned(user, response)) return
-    if (amount > Number(user.balance_bc)) { response.status(400).json({ error: 'Сумма больше доступного баланса.' }); return }
+    const available = currency === 'A' ? Number(user.balance_a) : Number(user.balance_b)
+    if (amount > available) { response.status(400).json({ error: `Сумма больше доступного баланса ${currency}.` }); return }
 
-    const code = generateCode()
-    const { data: withdrawal, error } = await supabase
-      .from('withdrawals')
-      .insert({ code, user_id: user.id, amount: round2(amount), currency, status: 'pending' })
-      .select('code, amount, currency, status, created_at')
-      .single()
-    if (error) throw error
+    const withdrawal = await createWithdrawal(user.id, amount, currency)
 
-    const { data: updated } = await supabase
-      .from('users')
-      .update({
-        balance_bc: round2(Number(user.balance_bc) - amount),
-        total_sent: round2(Number(user.total_sent) + amount),
-      })
-      .eq('id', user.id)
-      .select('*')
-      .single()
+    // Подтягиваем обновлённый профиль (баланс уже списан внутри createWithdrawal).
+    const { data: updated } = await supabase.from('users').select('*').eq('id', user.id).single()
 
-    await logTransaction(identity.userId, 'withdrawal', amount, 'BC', { code, status: 'pending' }).catch(() => {})
+    await logTransaction(identity.userId, 'withdrawal', amount, currency, { code: withdrawal.code, status: 'pending' }).catch(() => {})
 
     response.status(201).json({
       withdrawal: {
@@ -408,7 +391,7 @@ app.post('/api/withdrawals', async (request, response) => {
     })
   } catch (error) {
     console.error(error)
-    response.status(500).json({ error: 'Не удалось создать заявку.' })
+    response.status(500).json({ error: error instanceof Error ? error.message : 'Не удалось создать заявку.' })
   }
 })
 

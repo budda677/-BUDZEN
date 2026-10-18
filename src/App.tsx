@@ -18,7 +18,7 @@ type CurrencyBalances = Record<RateTicker, number>
 type CrashPhase = 'ready' | 'running' | 'crashed' | 'cashed'
 type CrashHistoryEntry = { multiplier: number; outcome: 'crashed' | 'cashed' }
 type WithdrawalStatus = 'pending' | 'approved' | 'rejected' | 'paid'
-type WithdrawalRequest = { code: string; amount: number; currency: 'BC'; status: WithdrawalStatus; createdAt: string }
+type WithdrawalRequest = { code: string; amount: number; currency: 'A' | 'B'; status: WithdrawalStatus; createdAt: string }
 type QuestId = 'exchange' | 'invite' | 'upgrader'
 type TelegramUser = { id?: number; first_name?: string; last_name?: string; username?: string }
 type ProfileIdentity = { id: string; name: string; username: string }
@@ -306,6 +306,7 @@ function App() {
   const [topUpCode, setTopUpCode] = useState('')
   const [topUpMessage, setTopUpMessage] = useState('')
   const [withdrawalAmount, setWithdrawalAmount] = useState('100')
+  const [withdrawalCurrency, setWithdrawalCurrency] = useState<'A' | 'B'>('A')
   const [withdrawalRequests, setWithdrawalRequests] = useState<WithdrawalRequest[] | null>(null)
   const [withdrawalFeedback, setWithdrawalFeedback] = useState<{ kind: 'error' | 'success'; text: string } | null>(null)
   const [generatedWithdrawalCode, setGeneratedWithdrawalCode] = useState<string | null>(null)
@@ -362,6 +363,7 @@ function App() {
   const transferFee = Number.isFinite(transferValue) && transferValue > 0 ? Number((transferValue * transferFeeRate).toFixed(2)) : 0
   const transferTotal = Number.isFinite(transferValue) && transferValue > 0 ? Number((transferValue + transferFee).toFixed(2)) : 0
   const transferAvailable = demoBalance
+  const withdrawalAvailable = currencyBalances[withdrawalCurrency]
   const yesterday = today ? shiftDateKey(today, -1) : ''
   const dailyClaimedToday = dailyBonus.lastClaimDate === today
   const consecutiveStreak = dailyBonus.lastClaimDate === yesterday ? dailyBonus.streak : 0
@@ -840,16 +842,19 @@ function App() {
       setWithdrawalFeedback({ kind: 'error', text: 'Укажи сумму больше нуля.' })
       return
     }
-    if (amount > demoBalance) {
-      setWithdrawalFeedback({ kind: 'error', text: 'Сумма больше доступного баланса.' })
+    if (amount > withdrawalAvailable) {
+      setWithdrawalFeedback({ kind: 'error', text: `Сумма больше доступного баланса ${withdrawalCurrency}.` })
       return
     }
 
     setWithdrawalSubmitting(true)
     setWithdrawalFeedback(null)
     try {
-      const result = await api.createWithdrawal(amount)
-      if (result.profile) setProfile(result.profile)
+      const result = await api.createWithdrawal(amount, withdrawalCurrency)
+      if (result.profile) {
+        setProfile(result.profile)
+        setCurrencyBalances({ A: result.profile.balanceA, B: result.profile.balanceB })
+      }
       setWithdrawalRequests((requests) => [result.withdrawal, ...(requests ?? [])].slice(0, 50))
       setGeneratedWithdrawalCode(result.withdrawal.code)
       setWithdrawalAmount('')
@@ -1083,7 +1088,7 @@ function App() {
               <span className="action-icon">↗</span><span className="action-title">Перевод</span><span className="action-subtitle">Другу по username/ID</span><span className="action-arrow">↗</span>
             </button>
             <button className="action-card" onClick={() => { setWithdrawalFeedback(null); setTab('Вывод BC') }}>
-              <span className="action-icon">↗</span><span className="action-title">Вывод BC</span><span className="action-subtitle">Заявка на вывод</span><span className="action-arrow">↗</span>
+              <span className="action-icon">↗</span><span className="action-title">Вывод</span><span className="action-subtitle">Заявка на вывод A/B</span><span className="action-arrow">↗</span>
             </button>
             <button className="action-card" onClick={() => { setTopUpMessage(''); setTab('Пополнить') }}>
               <span className="action-icon">＋</span><span className="action-title">Пополнить</span><span className="action-subtitle">По коду партнёра</span><span className="action-arrow">↗</span>
@@ -1198,14 +1203,27 @@ function App() {
 
       {tab === 'Вывод BC' && (
         <section className="section-view economy-view">
-          <div className="section-heading"><div><h2>Вывод BC</h2><p>Создание заявки на вывод</p></div></div>
+          <div className="section-heading"><div><h2>Вывод</h2><p>Создание заявки на вывод A или B</p></div></div>
           <section className="economy-card withdrawal-card">
-            <div className="withdrawal-available"><span>Доступно</span><strong>{formatBalance(demoBalance)} BC</strong></div>
+            <label className="game-field-label" htmlFor="withdrawal-currency">Валюта</label>
+            <div className="rate-switcher" role="group" aria-label="Валюта для вывода">
+              {currencies.map((currency) => (
+                <button
+                  className={withdrawalCurrency === currency.ticker ? 'rate-option active' : 'rate-option'}
+                  key={currency.ticker}
+                  onClick={() => { setWithdrawalCurrency(currency.ticker); setWithdrawalFeedback(null) }}
+                  aria-pressed={withdrawalCurrency === currency.ticker}
+                >
+                  {currency.name} <small>({currency.ticker})</small>
+                </button>
+              ))}
+            </div>
+            <div className="withdrawal-available"><span>Доступно</span><strong>{formatBalance(withdrawalAvailable)} {withdrawalCurrency}</strong></div>
             <label className="game-field-label" htmlFor="withdrawal-amount">Сумма вывода</label>
             <div className="withdrawal-input-row">
-              <input id="withdrawal-amount" type="number" min="0.01" max={demoBalance} step="0.01" value={withdrawalAmount} onChange={(event) => { setWithdrawalAmount(event.target.value); setWithdrawalFeedback(null) }} />
-              <button className="stake-max-button" onClick={() => setWithdrawalAmount(String(demoBalance))} disabled={demoBalance <= 0}>MAX</button>
-              <span>BC</span>
+              <input id="withdrawal-amount" type="number" min="0.01" max={withdrawalAvailable} step="0.01" value={withdrawalAmount} onChange={(event) => { setWithdrawalAmount(event.target.value); setWithdrawalFeedback(null) }} />
+              <button className="stake-max-button" onClick={() => setWithdrawalAmount(String(withdrawalAvailable))} disabled={withdrawalAvailable <= 0}>MAX</button>
+              <span>{withdrawalCurrency}</span>
             </div>
 
             {generatedWithdrawalCode ? (
@@ -1219,7 +1237,7 @@ function App() {
               <>
                 <p className="withdrawal-disclaimer">Заявка сохраняется в локальной базе со статусом «Ожидает». Автоматический перевод не подключён.</p>
                 {withdrawalFeedback && <p className={`withdrawal-feedback ${withdrawalFeedback.kind}`} role={withdrawalFeedback.kind === 'error' ? 'alert' : 'status'}>{withdrawalFeedback.text}</p>}
-                <button className="game-action-button" onClick={submitWithdrawal} disabled={withdrawalSubmitting || demoBalance <= 0}>
+                <button className="game-action-button" onClick={submitWithdrawal} disabled={withdrawalSubmitting || withdrawalAvailable <= 0}>
                   {withdrawalSubmitting ? 'Создаём заявку…' : 'Создать заявку'}
                 </button>
               </>
@@ -1237,7 +1255,7 @@ function App() {
                 return (
                   <article className="withdrawal-row" key={request.code}>
                     <div><strong>{request.code}</strong><small>{Number.isNaN(createdDate.getTime()) ? '—' : createdDate.toLocaleString('ru-RU')}</small></div>
-                    <div><strong>{formatBalance(request.amount)} {request.currency}</strong><small className={`withdrawal-status ${request.status}`}>{request.status === 'pending' ? 'В ожидании' : request.status === 'approved' || request.status === 'paid' ? 'Выполнено' : 'Отклонено'}</small></div>
+                    <div><strong>{formatBalance(request.amount)} {request.currency}</strong><small className={`withdrawal-status ${request.status}`}>{request.status === 'pending' ? 'В ожидании' : request.status === 'approved' || request.status === 'paid' ? 'Выведено' : 'Отклонено'}</small></div>
                   </article>
                 )
               })}</div>
