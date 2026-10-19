@@ -419,6 +419,14 @@ button { font: inherit; cursor: pointer; }
 @keyframes crash-pedal-spin { to { transform: rotate(360deg); } }
 @keyframes crash-rider-bob { to { transform: translateY(-2px) rotate(-2deg); } }
 @keyframes crash-road-flow { to { stroke-dashoffset: -42; } }
+.upgrade-wheel-pointer {
+  fill: #f0c24e;
+  transform-box: view-box;
+  transform-origin: 160px 160px;
+}
+.upgrade-wheel-pointer.is-spinning {
+  animation: upgrader-pointer-spin var(--spin-duration, 6000ms) cubic-bezier(.12,.72,.14,1) both;
+}
 @keyframes upgrader-pointer-spin {
   from { transform: rotate(0deg); }
   to { transform: rotate(var(--needle-angle, 1800deg)); }

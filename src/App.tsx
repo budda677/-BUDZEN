@@ -583,21 +583,30 @@ function App() {
       return
     }
 
-    setUpgradeError('')
+        setUpgradeError('')
     setUpgradeResult(null)
+
+    // Запускаем вращение СРАЗУ и синхронно: новый угол И is-spinning в одном
+    // обновлении, чтобы CSS-анимация стартовала от 0° к свежему углу.
+    // Раньше угол выставлялся только после ответа сервера — анимация уже
+    // «пролетала» к старому значению и визуально стояла на месте.
+    const nextAngle = 1800 + Math.round(Math.random() * 4) * 360 + (Math.random() * 2 - 1) * 160
     setUpgradeSpinDuration(spinDuration)
+    setUpgradeSpinAngle(nextAngle)
     setUpgradeSpinning(true)
 
+    // Крутим минимум spinDuration мс, запрос к серверу идёт параллельно.
+    const spinPromise = new Promise((resolve) => window.setTimeout(resolve, spinDuration))
+
     try {
-      const result = await api.upgrade(wager, chance)
+      const [result] = await Promise.all([api.upgrade(wager, chance), spinPromise])
       setProfile(result.profile)
-      setUpgradeSpinAngle(1800 + (Math.random() * 2 - 1) * 160)
-      window.setTimeout(() => {
-        setQuestState((state) => ({ ...state, upgraderCompleted: true }))
-        setUpgradeResult({ won: result.won, payout: result.payout, stake: wager })
-        setUpgradeSpinning(false)
-      }, spinDuration)
+      setQuestState((state) => ({ ...state, upgraderCompleted: true }))
+      setUpgradeResult({ won: result.won, payout: result.payout, stake: wager })
+      setUpgradeSpinning(false)
     } catch (error) {
+      // Дожидаемся конца вращения, чтобы колесо не «дёргалось» при ошибке.
+      await spinPromise
       setUpgradeError(error instanceof Error ? error.message : 'Не удалось сделать ставку.')
       setUpgradeSpinning(false)
     }
@@ -1364,11 +1373,16 @@ function App() {
                         <path d="M126 177 160 152l34 25v14l-34-25-34 25z" className="upgrade-chevron dim" />
                         <text x="160" y="223" className="upgrade-wheel-chance-label" textAnchor="middle">{selectedChance}%</text>
                       </g>
-                      <path
-                        d="m160 277-9 20 9-5 9 5z"
-                        className={upgradeSpinning ? 'upgrade-wheel-pointer is-spinning' : 'upgrade-wheel-pointer'}
-                        style={{ '--pointer-spin-angle': `${upgradeSpinAngle}deg`, '--spin-duration': `${upgradeSpinDuration}ms`, ...(!upgradeSpinning ? { transform: `rotate(${upgradeSpinAngle % 360}deg)` } : {}) } as React.CSSProperties}
-                      />
+                                            <path
+                                              key={upgradeSpinAngle}
+                                              d="m160 277-9 20 9-5 9 5z"
+                                              className={upgradeSpinning ? 'upgrade-wheel-pointer is-spinning' : 'upgrade-wheel-pointer'}
+                                              style={{
+                                                '--needle-angle': `${upgradeSpinAngle}deg`,
+                                                '--spin-duration': `${upgradeSpinDuration}ms`,
+                                                ...(!upgradeSpinning ? { transform: `rotate(${upgradeSpinAngle % 360}deg)` } : {}),
+                                              } as React.CSSProperties}
+                                            />
                     </svg>
                   </div>
                 </div>
@@ -1691,7 +1705,7 @@ function App() {
 
           <div className="profile-stats" aria-label="Статистика профиля">
               <article className="profile-stat-card"><span>Баланс</span><strong>{formatBalance(demoBalance)} <small>BC</small></strong></article>
-              <article className="profile-stat-card"><span>Отправлено</span><strong>{formatBalance(profile?.totalSent ?? 0)} <small>BC</small></strong></article>
+              <article className="profile-stat-card"><span>Выведено</span><strong>{formatBalance(profile?.totalSent ?? 0)} <small>BC</small></strong></article>
               <article className="profile-stat-card"><span>Пополнено</span><strong>{formatBalance(profile?.totalDeposited ?? 0)} <small>BC</small></strong></article>
           </div>
         </section>
