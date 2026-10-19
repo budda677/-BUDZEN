@@ -421,15 +421,6 @@ button { font: inherit; cursor: pointer; }
 @keyframes crash-road-flow { to { stroke-dashoffset: -42; } }
 .upgrade-wheel-pointer {
   fill: #f0c24e;
-  transform-box: view-box;
-  transform-origin: 160px 160px;
-}
-.upgrade-wheel-pointer.is-spinning {
-  animation: upgrader-pointer-spin var(--spin-duration, 6000ms) cubic-bezier(.12,.72,.14,1) both;
-}
-@keyframes upgrader-pointer-spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(var(--needle-angle, 1800deg)); }
 }
 .portfolio-balance { margin-bottom: 30px; }
 .portfolio-currencies-heading { margin-top: 0; }
