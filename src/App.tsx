@@ -63,7 +63,65 @@ const streakBonusAmount = 50
 const questRewardAmount = 5
 const transferFeeRate = 0.02
 const startingCurrencyBalances: CurrencyBalances = { A: 1000, B: 500 }
-const upgradeWheelCircumference = 2 * Math.PI * 116
+// Строит SVG path дуги радиуса r вокруг центра (cx,cy). Дуга шириной `chance`
+// процентов, СИММЕТРИЧНО относительно низа колеса (где стоит указатель при
+// повороте 0°) — так визуал совпадает с computeUpgradeRotation.
+function upgradeArcPath(chance: number, cx = 160, cy = 160, r = 116) {
+  const spanDeg = chance * 3.6
+  // Центр дуги внизу = 90° в стандартных SVG-координатах (0° → вправо, по часовой).
+  const centerDeg = 90
+  const startDeg = centerDeg - spanDeg / 2
+  const endDeg = centerDeg + spanDeg / 2
+  const toXY = (deg: number) => {
+    const rad = (deg * Math.PI) / 180
+    return { x: cx + r * Math.cos(rad), y: cy + r * Math.sin(rad) }
+  }
+  const start = toXY(startDeg)
+  const end = toXY(endDeg)
+  const largeArc = spanDeg > 180 ? 1 : 0
+  // sweep=1 — по часовой (как идёт увеличение угла).
+  return `M ${start.x} ${start.y} A ${r} ${r} 0 ${largeArc} 1 ${end.x} ${end.y}`
+}
+
+// Подбирает накопительный угол поворота указателя под результат раунда.
+
+//
+// Геометрия колеса: стрелка по умолчанию смотрит ВНИЗ (6 часов). Выигрышная
+// дуга (strokeDasharray + rotate(-90) + отрицательный dashoffset) центрирована
+// ровно внизу, т.е. под стрелкой в положении «0°», и имеет ширину chance*3.6°.
+// Стрелка при повороте на `rotation` смотрит на (180 + rotation)° от верха.
+//
+// Поэтому:
+//  • выигрыш — поворот указывает в центр дуги, т.е. rotation ≈ 0 (mod 360);
+//  • проигрыш — поворот уводит стрелку ВНЕ дуги с запасом от края.
+function computeUpgradeRotation(won: boolean, chance: number, extraTurns: number) {
+  // Полуширина выигрышной дуги в градусах поворота стрелки.
+  const halfWin = (chance * 3.6) / 2
+  // Небольшой зазор, чтобы «не на краю»: для проигрыша уходим за границу.
+  const margin = 8
+
+    let baseRotation: number
+  if (won) {
+    // Центр выигрышной зоны — под стрелкой при повороте 0°. Смещаемся внутри,
+    // но не к самому краю (safeHalf), чтобы остриё было явно в зоне.
+    const safeHalf = Math.max(0, halfWin - margin)
+    baseRotation = (Math.random() * 2 - 1) * safeHalf
+  } else {
+    // Проигрышная часть — сектор, симметричный выигрышному относительно верха
+    // (его центр — напротив выигрышной зоны). Стрелка попадает туда при повороте
+    // на 180°: (180 + 180) ≡ 0° от верха. Полуширина свободной зоны:
+    const loseHalf = (360 - chance * 3.6) / 2
+    // Если свободной зоны мало (огромный шанс) — всё равно целимся в её центр.
+    const loseSafeHalf = Math.max(0, loseHalf - margin)
+    const loseOffset = (Math.random() * 2 - 1) * loseSafeHalf
+    baseRotation = 180 + loseOffset
+  }
+
+  return extraTurns * 360 + baseRotation
+}
+
+
+
 const exchangeAssets: { ticker: ExchangeTicker; name: string }[] = [
   { ticker: 'BC', name: 'BUDDA COINS' },
   { ticker: 'A', name: 'ALPHA' },
@@ -314,8 +372,9 @@ function App() {
   const [upgradeStake, setUpgradeStake] = useState(() => String(Math.min(100, demoBalance)))
   const [fastSpinEnabled, setFastSpinEnabled] = useState(false)
   const [upgradeSpinning, setUpgradeSpinning] = useState(false)
-  const [upgradeSpinDuration, setUpgradeSpinDuration] = useState(longSpinDuration)
+    const [upgradeSpinDuration, setUpgradeSpinDuration] = useState(longSpinDuration)
   const [upgradeSpinAngle, setUpgradeSpinAngle] = useState(1800)
+  const [upgradeSpinKey, setUpgradeSpinKey] = useState(0)
   const [upgradeResult, setUpgradeResult] = useState<{ won: boolean; payout: number; stake: number } | null>(null)
   const [upgradeError, setUpgradeError] = useState('')
   const [crashStake, setCrashStake] = useState(() => String(Math.min(100, demoBalance)))
@@ -584,32 +643,34 @@ function App() {
     }
 
         setUpgradeError('')
-    setUpgradeResult(null)
+        setUpgradeResult(null)
 
-    // Запускаем вращение СРАЗУ и синхронно: новый угол И is-spinning в одном
-    // обновлении, чтобы CSS-анимация стартовала от 0° к свежему углу.
-    // Раньше угол выставлялся только после ответа сервера — анимация уже
-    // «пролетала» к старому значению и визуально стояла на месте.
-    const nextAngle = 1800 + Math.round(Math.random() * 4) * 360 + (Math.random() * 2 - 1) * 160
-    setUpgradeSpinDuration(spinDuration)
-    setUpgradeSpinAngle(nextAngle)
-    setUpgradeSpinning(true)
+        // Сначала узнаём исход у сервера, затем крутим стрелку сразу в НУЖНУЮ зону.
+        // Так визуал всегда совпадает с результатом: при выигрыше остриё встаёт
+        // в центр зелёного сектора, при проигрыше — вне его (с зазором от края).
+        // Держим is-spinning включённым заранее, чтобы к моменту финального угла
+        // запустилась плавная анимация к этому углу.
+        const turns = 3 + Math.floor(Math.random() * 3)   // 3–5 полных оборотов
 
-    // Крутим минимум spinDuration мс, запрос к серверу идёт параллельно.
-    const spinPromise = new Promise((resolve) => window.setTimeout(resolve, spinDuration))
+        try {
+          const result = await api.upgrade(wager, chance)
+          setProfile(result.profile)
+          setQuestState((state) => ({ ...state, upgraderCompleted: true }))
 
-    try {
-      const [result] = await Promise.all([api.upgrade(wager, chance), spinPromise])
-      setProfile(result.profile)
-      setQuestState((state) => ({ ...state, upgraderCompleted: true }))
-      setUpgradeResult({ won: result.won, payout: result.payout, stake: wager })
-      setUpgradeSpinning(false)
-    } catch (error) {
-      // Дожидаемся конца вращения, чтобы колесо не «дёргалось» при ошибке.
-      await spinPromise
-      setUpgradeError(error instanceof Error ? error.message : 'Не удалось сделать ставку.')
-      setUpgradeSpinning(false)
-    }
+          const targetRotation = computeUpgradeRotation(result.won, chance, turns)
+          setUpgradeSpinDuration(spinDuration)
+          setUpgradeSpinAngle(targetRotation)
+          setUpgradeSpinKey((key) => key + 1)
+          setUpgradeSpinning(true)
+
+          await new Promise((resolve) => window.setTimeout(resolve, spinDuration))
+
+          setUpgradeResult({ won: result.won, payout: result.payout, stake: wager })
+          setUpgradeSpinning(false)
+        } catch (error) {
+          setUpgradeError(error instanceof Error ? error.message : 'Не удалось сделать ставку.')
+          setUpgradeSpinning(false)
+        }
   }
 
   function refillDemoBalance() {
@@ -1357,16 +1418,12 @@ function App() {
                       </defs>
                       <g className="upgrade-wheel-motion">
                         <circle cx="160" cy="160" r="137" className="upgrade-wheel-ticks" />
-                        <circle cx="160" cy="160" r="116" className="upgrade-wheel-track" />
-                        <circle
-                          cx="160"
-                          cy="160"
-                          r="116"
+                                                <circle cx="160" cy="160" r="116" className="upgrade-wheel-track" />
+                        <path
+                          d={upgradeArcPath(selectedChance)}
                           className="upgrade-wheel-chance"
+                          fill="none"
                           stroke="url(#upgrade-ring-gradient)"
-                          strokeDasharray={`${upgradeWheelCircumference * selectedChance / 100} ${upgradeWheelCircumference * (100 - selectedChance) / 100}`}
-                          strokeDashoffset={-upgradeWheelCircumference * ((180 - selectedChance * 1.8) / 360)}
-                          transform="rotate(-90 160 160)"
                         />
                         <circle cx="160" cy="160" r="92" className="upgrade-wheel-center" />
                         <path d="M119 149 160 119l41 30v15l-41-30-41 30z" className="upgrade-chevron bright" />
@@ -1374,7 +1431,7 @@ function App() {
                         <text x="160" y="223" className="upgrade-wheel-chance-label" textAnchor="middle">{selectedChance}%</text>
                       </g>
                                             <path
-                                              key={upgradeSpinAngle}
+                                              key={upgradeSpinKey}
                                               d="m160 277-9 20 9-5 9 5z"
                                               className={upgradeSpinning ? 'upgrade-wheel-pointer is-spinning' : 'upgrade-wheel-pointer'}
                                               style={{
