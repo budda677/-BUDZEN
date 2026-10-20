@@ -395,6 +395,14 @@ function App() {
   // Если игрок нажал «Забрать» раньше, чем сервер прислал точку краша (и сохранил
   // заезд), запоминаем экранный множитель и выполним кашинг, как только точка придёт.
   const pendingCashout = useRef<number | null>(null)
+  // Синхронная блокировка апгрейдера: state на телефоне не успевает обновиться
+  // между быстрыми тапами, из-за чего запускалось несколько раундов разом.
+  const upgradeBusyRef = useRef(false)
+  // id текущего rAF-цикла вращения стрелки — чтобы отменять предыдущий.
+  const upgradeRafRef = useRef<number | null>(null)
+  // Актуальный угол в ref — playUpgrade не должен зависеть от устаревшего
+  // замыкания state после await. Обновляем в animateUpgradePointer.
+  const upgradeSpinAngleRef = useRef(0)
   const selectedCurrency = currencies.find((currency) => currency.ticker === selectedTicker) ?? currencies[0]
   const selectedRates = rates.history[selectedTicker]
   const currentRate = selectedRates.length > 0 ? selectedRates[selectedRates.length - 1].rate : (rates.rates[selectedTicker] ?? 1)
@@ -620,7 +628,7 @@ function App() {
     const spinDuration = fastSpinEnabled ? quickSpinDuration : longSpinDuration
     const wager = Number(upgradeStake)
     const chance = Number(chanceEntry)
-    if (upgradeSpinning) return
+        if (upgradeBusyRef.current || upgradeSpinning) return
     if (!Number.isFinite(wager) || wager <= 0) {
       setUpgradeError('Введите ставку больше нуля.')
       return
@@ -634,63 +642,66 @@ function App() {
       return
     }
 
-        setUpgradeError('')
-        setUpgradeResult(null)
+            upgradeBusyRef.current = true
+    setUpgradeSpinning(true)
+    setUpgradeError('')
+    setUpgradeResult(null)
 
-        // Узнаём исход у сервера и крутим стрелку ровно в нужную зону через rAF.
-        const turns = 3 + Math.floor(Math.random() * 3)   // 3–5 полных оборотов
+    const turns = 3 + Math.floor(Math.random() * 3)
 
-        try {
-          const result = await api.upgrade(wager, chance)
-          setProfile(result.profile)
-          setQuestState((state) => ({ ...state, upgraderCompleted: true }))
+    try {
+      const result = await api.upgrade(wager, chance)
+      setProfile(result.profile)
+      setQuestState((state) => ({ ...state, upgraderCompleted: true }))
 
-          // Начальный угол — текущее положение стрелки (без рывка в 0).
-          const startAngle = upgradeSpinAngle
-          // Целевой абсолютный угол: довернём от старта на turns оборотов + базовый
-          // угол, соответствующий результату. Кратность 360 роли не играет для вида,
-          // важно лишь (target - previous) по модулю — берём так, чтобы всегда
-          // докручивать ВПЕРЁД (по часовой) нужное число оборотов.
-          const base = computeUpgradeRotation(result.won, chance, 0)
-          const prevMod = ((startAngle % 360) + 360) % 360
-          const baseMod = ((base % 360) + 360) % 360
-          // Разница по часовой, чтобы попасть в baseMod, плюс turns полных оборотов.
-          let delta = baseMod - prevMod
-          if (delta < 0) delta += 360
-          const targetAngle = startAngle + turns * 360 + delta
+      const startAngle = upgradeSpinAngleRef.current
+      const base = computeUpgradeRotation(result.won, chance, 0)
+      const prevMod = ((startAngle % 360) + 360) % 360
+      const baseMod = ((base % 360) + 360) % 360
+      let delta = baseMod - prevMod
+      if (delta < 0) delta += 360
+      const targetAngle = startAngle + turns * 360 + delta
 
-          setUpgradeSpinning(true)
-          await animateUpgradePointer(startAngle, targetAngle, spinDuration)
+      await animateUpgradePointer(startAngle, targetAngle, spinDuration)
 
-          setUpgradeResult({ won: result.won, payout: result.payout, stake: wager })
-          setUpgradeSpinning(false)
-        } catch (error) {
-          setUpgradeError(error instanceof Error ? error.message : 'Не удалось сделать ставку.')
-          setUpgradeSpinning(false)
-        }
+      setUpgradeResult({ won: result.won, payout: result.payout, stake: wager })
+    } catch (error) {
+      setUpgradeError(error instanceof Error ? error.message : '');
+    } finally {
+      upgradeBusyRef.current = false
+      setUpgradeSpinning(false)
+    }
   }
 
   // Плавно крутит стрелку от from к to за duration мс через requestAnimationFrame.
   // Возвращает промис, который резолвится по завершении. Угол храним в state —
   // рисуем через SVG-атрибут transform="rotate(angle 160 160)", без CSS origin.
-  function animateUpgradePointer(from: number, to: number, duration: number) {
-        return new Promise<void>((resolve) => {
-          const startedAt = performance.now()
-          const easeOut = (t: number) => 1 - Math.pow(1 - t, 3)    // cubic ease-out
-          const step = () => {
-            const elapsed = performance.now() - startedAt
-            const progress = Math.min(1, elapsed / duration)
-            const eased = easeOut(progress)
-            setUpgradeSpinAngle(from + (to - from) * eased)
-            if (progress < 1) {
-              requestAnimationFrame(step)
-            } else {
-              setUpgradeSpinAngle(to)
-              resolve()
-            }
-          }
-          requestAnimationFrame(step)
-        })
+    function animateUpgradePointer(from: number, to: number, duration: number) {
+    if (upgradeRafRef.current !== null) {
+      cancelAnimationFrame(upgradeRafRef.current)
+      upgradeRafRef.current = null
+    }
+    return new Promise<void>((resolve) => {
+      const startedAt = performance.now()
+      const easeOut = (t: number) => 1 - Math.pow(1 - t, 3)
+      const step = () => {
+        const elapsed = performance.now() - startedAt
+        const progress = Math.min(1, elapsed / duration)
+        const eased = easeOut(progress)
+        const angle = from + (to - from) * eased
+        upgradeSpinAngleRef.current = angle
+        setUpgradeSpinAngle(angle)
+        if (progress < 1) {
+          upgradeRafRef.current = requestAnimationFrame(step)
+        } else {
+          upgradeSpinAngleRef.current = to
+          setUpgradeSpinAngle(to)
+          upgradeRafRef.current = null
+          resolve()
+        }
+      }
+      upgradeRafRef.current = requestAnimationFrame(step)
+    })
   }
 
   function refillDemoBalance() {
