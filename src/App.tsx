@@ -624,11 +624,11 @@ function App() {
   const cyclistX = crashWorldX - cameraX
   const cyclistY = crashRoadYAt(crashWorldX)
 
-  async function playUpgrade() {
+    async function playUpgrade() {
     const spinDuration = fastSpinEnabled ? quickSpinDuration : longSpinDuration
     const wager = Number(upgradeStake)
     const chance = Number(chanceEntry)
-        if (upgradeBusyRef.current || upgradeSpinning) return
+    if (upgradeBusyRef.current || upgradeSpinning) return
     if (!Number.isFinite(wager) || wager <= 0) {
       setUpgradeError('Введите ставку больше нуля.')
       return
@@ -642,31 +642,56 @@ function App() {
       return
     }
 
-            upgradeBusyRef.current = true
+    upgradeBusyRef.current = true
     setUpgradeSpinning(true)
     setUpgradeError('')
     setUpgradeResult(null)
 
-    const turns = 3 + Math.floor(Math.random() * 3)
+    // 1. СРАЗУ запускаем прокрутку, не дожидаясь ответа сервера — убираем «пинг».
+    //    Крутим несколько полных оборотов с ease-out к произвольной промежуточной
+    //    цели. Запрос к серверу летит параллельно.
+    const startAngle = upgradeSpinAngleRef.current
+    const idleTurns = 4 + Math.floor(Math.random() * 2)   // 4–5 оборотов «вхолостую»
+    const idleTarget = startAngle + idleTurns * 360
+    const spinPromise = animateUpgradePointer(startAngle, idleTarget, spinDuration)
+
+        let result: Awaited<ReturnType<typeof api.upgrade>> | null = null
+    let requestError: unknown = null
+    let answered = false
+    const requestPromise = api.upgrade(wager, chance)
+      .then((r) => { result = r; answered = true })
+      .catch((e) => { requestError = e; answered = true })
+
+    // 2. Дожидаемся конца «холостой» прокрутки. Если сервер ещё не ответил
+    //    (холодный старт) — продолжаем крутить ещё оборот, чтобы стрелка
+    //    не замирала. Так пользователь не видит простоя.
+    await spinPromise
+    while (!answered) {
+      const cur = upgradeSpinAngleRef.current
+      await animateUpgradePointer(cur, cur + 360, 900)
+    }
+    await requestPromise
 
     try {
-      const result = await api.upgrade(wager, chance)
-      setProfile(result.profile)
+      if (requestError || !result) throw requestError instanceof Error ? requestError : new Error('Не удалось сделать ставку.')
+      const res = result
+
+      setProfile(res.profile)
       setQuestState((state) => ({ ...state, upgraderCompleted: true }))
 
-      const startAngle = upgradeSpinAngleRef.current
-      const base = computeUpgradeRotation(result.won, chance, 0)
-      const prevMod = ((startAngle % 360) + 360) % 360
+      // 3. Короткий довод из текущего положения в зону результата (~650 мс).
+      const current = upgradeSpinAngleRef.current
+      const base = computeUpgradeRotation(res.won, chance, 0)
+      const prevMod = ((current % 360) + 360) % 360
       const baseMod = ((base % 360) + 360) % 360
       let delta = baseMod - prevMod
       if (delta < 0) delta += 360
-      const targetAngle = startAngle + turns * 360 + delta
+      const finalAngle = current + 360 + delta   // ещё оборот + точная зона
+      await animateUpgradePointer(current, finalAngle, 650)
 
-      await animateUpgradePointer(startAngle, targetAngle, spinDuration)
-
-      setUpgradeResult({ won: result.won, payout: result.payout, stake: wager })
+      setUpgradeResult({ won: res.won, payout: res.payout, stake: wager })
     } catch (error) {
-      setUpgradeError(error instanceof Error ? error.message : '');
+      setUpgradeError(error instanceof Error ? error.message : 'Не удалось сделать ставку.')
     } finally {
       upgradeBusyRef.current = false
       setUpgradeSpinning(false)

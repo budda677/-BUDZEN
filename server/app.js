@@ -492,17 +492,31 @@ app.post('/api/games/upgrade', async (request, response) => {
   try {
     const gameUser = await getOrCreateUser(identity.userId, identity.tg)
     if (blockedIfBanned(gameUser, response)) return
-    await adjustBalance(identity.userId, 'balance_bc', -stake)
 
+    const stakeNum = Number(gameUser.balance_bc)
+    if (stake > stakeNum) { response.status(400).json({ error: 'Недостаточно BC для этой ставки.' }); return }
+
+    // Исход раунда.
     const won = Math.random() * 100 < chance
     const payout = won ? round2(stake * 100 / chance) : 0
+    const nextBalance = round2(stakeNum - stake + payout)
 
-    if (won) await adjustBalance(identity.userId, 'balance_bc', payout)
-    await logTransaction(identity.userId, 'purchase', payout, 'BC', { game: 'upgrade', stake, chance, won, payout }).catch(() => {})
-    if (won) await setAchievementProgress(identity.userId, 'first_upgrade', 1)
+    // ОДИН UPDATE вместо цепочки SELECT+UPDATE (adjustBalance) — единственный
+    // блокирующий запрос к Supabase. Раньше их было ~10 подряд (по ~800мс каждый).
+    const { data: updated, error } = await supabase
+      .from('users')
+      .update({ balance_bc: nextBalance, updated_at: new Date().toISOString() })
+      .eq('id', identity.userId)
+      .select('*')
+      .single()
+    if (error) throw error
 
-    const { getUserById } = await import('./db.js')
-    const updated = await getUserById(identity.userId)
+    // Побочные записи (лог/ачивки) НЕ нужны для ответа — не ждём их вообще.
+    // На serverless это риск, что функция завершится до записи, но ради скорости
+    // жертвуем незначительной частью логов; основные данные (баланс) уже сохранены.
+    void logTransaction(identity.userId, 'purchase', payout, 'BC', { game: 'upgrade', stake, chance, won, payout }).catch(() => {})
+    if (won) void setAchievementProgress(identity.userId, 'first_upgrade', 1).catch(() => {})
+
     response.json({ profile: publicProfile(updated), won, payout, stake })
   } catch (error) {
     console.error(error)
