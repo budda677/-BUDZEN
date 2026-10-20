@@ -655,26 +655,26 @@ function App() {
     const idleTarget = startAngle + idleTurns * 360
     const spinPromise = animateUpgradePointer(startAngle, idleTarget, spinDuration)
 
-        let result: Awaited<ReturnType<typeof api.upgrade>> | null = null
-    let requestError: unknown = null
-    let answered = false
+            // Храним в объекте-боксе: TS не сужает тип поля так агрессивно, как локальную переменную.
+    type UpgradeResult = Awaited<ReturnType<typeof api.upgrade>>
+    const box: { result: UpgradeResult | null; error: unknown; answered: boolean } = { result: null, error: null, answered: false }
     const requestPromise = api.upgrade(wager, chance)
-      .then((r) => { result = r; answered = true })
-      .catch((e) => { requestError = e; answered = true })
+      .then((r) => { box.result = r; box.answered = true })
+      .catch((e) => { box.error = e; box.answered = true })
 
     // 2. Дожидаемся конца «холостой» прокрутки. Если сервер ещё не ответил
     //    (холодный старт) — продолжаем крутить ещё оборот, чтобы стрелка
     //    не замирала. Так пользователь не видит простоя.
     await spinPromise
-    while (!answered) {
+    while (!box.answered) {
       const cur = upgradeSpinAngleRef.current
       await animateUpgradePointer(cur, cur + 360, 900)
     }
     await requestPromise
 
     try {
-      if (requestError || !result) throw requestError instanceof Error ? requestError : new Error('Не удалось сделать ставку.')
-      const res = result
+      if (box.error || !box.result) throw box.error instanceof Error ? box.error : new Error('Не удалось сделать ставку.')
+      const res = box.result
 
       setProfile(res.profile)
       setQuestState((state) => ({ ...state, upgraderCompleted: true }))
